@@ -1,0 +1,6 @@
+{
+  "name": "Serralheria Projetos",
+  "description": "Ferramenta de apoio para serralheiros para criar projetos com medidas e perfis de quadros principais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
