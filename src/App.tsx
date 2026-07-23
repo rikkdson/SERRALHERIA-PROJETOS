@@ -35,7 +35,12 @@ import {
   Rows,
   Shield,
   Menu,
-  Tags
+  Tags,
+  Zap,
+  Box,
+  DollarSign,
+  Compass,
+  Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -45,9 +50,22 @@ import {
   PRESET_PROFILES, 
   PieceConfig, 
   PieceType, 
-  PIECE_TYPE_LABELS 
+  PIECE_TYPE_LABELS,
+  MaterialProfile 
 } from './types';
 import { ProjectBlueprint } from './components/ProjectBlueprint';
+import { CutListModule } from './components/CutListModule';
+import { BarOptimizationModule } from './components/BarOptimizationModule';
+import { MaterialsLibraryModule } from './components/MaterialsLibraryModule';
+import { BudgetModule } from './components/BudgetModule';
+import { PriceCenterModule } from './components/PriceCenterModule';
+import { GeometricEngineModule } from './components/GeometricEngineModule';
+import { FreeDrawingModule } from './components/FreeDrawingModule';
+import { StructureAssistantModule } from './components/StructureAssistantModule';
+import { CategorizedHeaderNav } from './components/CategorizedHeaderNav';
+import { MobileBottomNav } from './components/MobileBottomNav';
+import { QuickActionFabModal } from './components/QuickActionFabModal';
+import { getMaterialProfiles, MATERIALS_UPDATED_EVENT } from './utils/materialsStore';
 
 // Initial pre-loaded projects for a premium, zero-friction first-use experience
 const DEFAULT_PROJECTS: MetalProject[] = [
@@ -111,11 +129,30 @@ export default function App() {
   // State variables
   const [projects, setProjects] = useState<MetalProject[]>([]);
   const [currentProject, setCurrentProject] = useState<MetalProject | null>(null);
-  const [activeTab, setActiveTab] = useState<'meus-projetos' | 'detalhes-projeto'>('meus-projetos');
+  const [activeTab, setActiveTab] = useState<'meus-projetos' | 'detalhes-projeto' | 'biblioteca-materiais' | 'central-precos' | 'motor-geometrico' | 'desenho-livre' | 'assistente-estruturas'>('assistente-estruturas');
+  const [projectSubTab, setProjectSubTab] = useState<'estrutura' | 'desenho-livre' | 'lista-corte' | 'otimizacao-barras' | 'orcamento'>('estrutura');
+  
+  // Material Profiles from Library (ET-006)
+  const [materialProfiles, setMaterialProfiles] = useState<MaterialProfile[]>([]);
+
+  useEffect(() => {
+    setMaterialProfiles(getMaterialProfiles());
+
+    const handleMaterialsUpdate = () => {
+      setMaterialProfiles(getMaterialProfiles());
+    };
+
+    window.addEventListener(MATERIALS_UPDATED_EVENT, handleMaterialsUpdate);
+    return () => {
+      window.removeEventListener(MATERIALS_UPDATED_EVENT, handleMaterialsUpdate);
+    };
+  }, []);
   
   // Modals & form states
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [isQuickFabOpen, setIsQuickFabOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [projectToDelete, setProjectToDelete] = useState<MetalProject | null>(null);
   
   const [isFrameModalOpen, setIsFrameModalOpen] = useState(false);
   const [frameWidth, setFrameWidth] = useState<string>('');
@@ -487,22 +524,44 @@ export default function App() {
   const handleSaveActiveProject = (updatedProj: MetalProject) => {
     updatedProj.updatedAt = new Date().toISOString();
     
-    const updatedProjects = projects.map(p => p.id === updatedProj.id ? updatedProj : p);
+    // Ensure if project doesn't exist in array yet, add it
+    const exists = projects.some(p => p.id === updatedProj.id);
+    const updatedProjects = exists
+      ? projects.map(p => p.id === updatedProj.id ? updatedProj : p)
+      : [updatedProj, ...projects];
+
     saveProjectsToLocalStorage(updatedProjects);
     setCurrentProject(updatedProj);
   };
 
-  // Handler: Delete project
-  const handleDeleteProject = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // prevent opening the project when clicking delete card
-    if (confirm("Tem certeza que deseja excluir este projeto? Esta ação não pode ser desfeita.")) {
-      const filtered = projects.filter(p => p.id !== id);
-      saveProjectsToLocalStorage(filtered);
-      if (currentProject?.id === id) {
-        setCurrentProject(null);
-        setActiveTab('meus-projetos');
-      }
+  // Handler: Generate structure via assistant and navigate to Free Drawing
+  const handleGenerateAndOpenDrawing = (updatedProj: MetalProject) => {
+    handleSaveActiveProject(updatedProj);
+    setCurrentProject(updatedProj);
+    setDraftPieces(updatedProj.pieces || []);
+    setActiveTab('desenho-livre');
+    setProjectSubTab('desenho-livre');
+  };
+
+  // Handler: Initiate Delete project
+  const handleDeleteProject = (proj: MetalProject, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation(); // prevent opening the project when clicking delete card
+    setProjectToDelete(proj);
+  };
+
+  // Handler: Confirm deletion of project
+  const confirmDeleteProject = () => {
+    if (!projectToDelete) return;
+    const targetId = projectToDelete.id;
+    const filtered = projects.filter(p => p.id !== targetId);
+    saveProjectsToLocalStorage(filtered);
+    
+    if (currentProject?.id === targetId) {
+      setCurrentProject(null);
+      setActiveTab('meus-projetos');
     }
+    
+    setProjectToDelete(null);
   };
 
   // Handler: Save Piece Configuration
@@ -543,6 +602,12 @@ export default function App() {
       orientation: pieceOrientation,
       angle: angleVal,
       observations: pieceObservations.trim(),
+      perfil: pieceProfile.trim() || 'Metalon 30x30 mm',
+      comprimento: lengthMm,
+      orientacao: pieceOrientation,
+      'orientação': pieceOrientation,
+      grupo: PIECE_TYPE_LABELS[pieceType] || 'Estrutura Interna',
+      ordem: editingPiece?.ordem !== undefined ? editingPiece.ordem : draftPieces.length + 2,
     };
 
     // Specific for Diagonal
@@ -787,27 +852,19 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col antialiased">
-      {/* Upper Brand bar */}
-      <header className="bg-slate-900 text-white border-b border-slate-800 shrink-0 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-amber-500 text-slate-950 p-2 rounded-lg font-bold flex items-center justify-center shadow-md">
-              <Hammer className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight font-display text-white">Serralheria Projetos</h1>
-              <p className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">Suporte Técnico & Medidas</p>
-            </div>
-          </div>
-          <div className="text-xs text-slate-400 font-mono hidden sm:flex items-center space-x-2 bg-slate-950/60 px-3 py-1.5 rounded-full border border-slate-800">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Modo Oficina Offline Ativo</span>
-          </div>
-        </div>
-      </header>
+      {/* Categorized Upper Brand bar & Navigation */}
+      <CategorizedHeaderNav
+        activeTab={activeTab}
+        projectSubTab={projectSubTab}
+        onSelectTab={(tab, subTab) => {
+          setActiveTab(tab as any);
+          if (subTab) setProjectSubTab(subTab as any);
+        }}
+        onOpenQuickAction={() => setIsQuickFabOpen(true)}
+      />
 
       {/* Main Content Space */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-28 md:pb-8 flex flex-col gap-6">
         <AnimatePresence mode="wait">
           
           {/* TAB 1: DASHBOARD (MEUS PROJETOS) */}
@@ -990,7 +1047,7 @@ export default function App() {
 
                         <button
                           id={`btn-excluir-projeto-${project.id}`}
-                          onClick={(e) => handleDeleteProject(project.id, e)}
+                          onClick={(e) => handleDeleteProject(project, e)}
                           className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition-colors duration-150 cursor-pointer"
                           title="Excluir projeto"
                         >
@@ -1012,12 +1069,9 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -15 }}
               transition={{ duration: 0.2 }}
-              className="grid grid-cols-1 lg:grid-cols-3 gap-8 w-full"
+              className="flex flex-col gap-6 w-full"
             >
-              {/* Left Column (2-grid span in lg): Title, Frame Visualization, and Status */}
-              <div className="lg:col-span-2 flex flex-col gap-6">
-                
-                {/* Back button and quick Save */}
+              {/* Back button and quick Save */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <button
                     id="btn-voltar-meus-projetos"
@@ -1029,9 +1083,17 @@ export default function App() {
                   </button>
 
                   <div className="flex items-center space-x-2">
-                    <span className="text-xs text-slate-400 font-mono italic">
-                      Modificações salvas localmente
-                    </span>
+                    <button
+                      id="btn-excluir-projeto-ativo"
+                      type="button"
+                      onClick={() => setProjectToDelete(currentProject)}
+                      className="text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200/80 px-3 py-2 rounded-xl transition duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                      title="Excluir este projeto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Excluir Projeto</span>
+                    </button>
+
                     <button
                       id="btn-salvar-projeto-manual"
                       onClick={() => {
@@ -1080,6 +1142,124 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* SUB-NAV TABS: ESTRUTURA vs LISTA DE CORTE vs OTIMIZAÇÃO DE BARRAS */}
+                <div className="bg-white p-2.5 border border-slate-200 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <button
+                      id="btn-subtab-estrutura"
+                      type="button"
+                      onClick={() => setProjectSubTab('estrutura')}
+                      className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer ${
+                        projectSubTab === 'estrutura'
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Layers className="w-4 h-4 text-indigo-400" />
+                      <span>📐 Quadro Principal</span>
+                    </button>
+
+                    <button
+                      id="btn-subtab-desenho-livre"
+                      type="button"
+                      onClick={() => setProjectSubTab('desenho-livre')}
+                      className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer ${
+                        projectSubTab === 'desenho-livre'
+                          ? 'bg-slate-900 text-amber-400 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Pencil className="w-4 h-4 text-amber-400" />
+                      <span>✏️ Desenho Livre</span>
+                    </button>
+
+                    <button
+                      id="btn-subtab-lista-corte"
+                      type="button"
+                      onClick={() => setProjectSubTab('lista-corte')}
+                      className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer ${
+                        projectSubTab === 'lista-corte'
+                          ? 'bg-slate-900 text-amber-400 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Scissors className="w-4 h-4 text-amber-500" />
+                      <span>✂️ Lista de Corte</span>
+                    </button>
+
+                    <button
+                      id="btn-subtab-otimizacao-barras"
+                      type="button"
+                      onClick={() => setProjectSubTab('otimizacao-barras')}
+                      className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer ${
+                        projectSubTab === 'otimizacao-barras'
+                          ? 'bg-slate-900 text-amber-400 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      <span>⚡ Otimização de Barras</span>
+                    </button>
+
+                    <button
+                      id="btn-subtab-orcamento"
+                      type="button"
+                      onClick={() => setProjectSubTab('orcamento')}
+                      className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer ${
+                        projectSubTab === 'orcamento'
+                          ? 'bg-slate-900 text-emerald-400 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <DollarSign className="w-4 h-4 text-emerald-400" />
+                      <span>💰 Orçamento</span>
+                    </button>
+                  </div>
+
+                  {projectSubTab === 'estrutura' && (
+                    <button
+                      id="btn-atalho-lista-corte"
+                      type="button"
+                      onClick={() => setProjectSubTab('lista-corte')}
+                      className="text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 px-3.5 py-2 rounded-xl transition inline-flex items-center gap-1.5 cursor-pointer border border-amber-200/60 shrink-0"
+                    >
+                      <Scissors className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Ver Lista de Corte Completa →</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* CONDITIONAL CONTENT BASED ON SUB-TAB */}
+                {projectSubTab === 'desenho-livre' ? (
+                  <FreeDrawingModule
+                    project={currentProject}
+                    onUpdateProject={handleSaveActiveProject}
+                  />
+                ) : projectSubTab === 'orcamento' ? (
+                  <BudgetModule 
+                    project={currentProject} 
+                    pieces={draftPieces} 
+                    onUpdateProject={handleSaveActiveProject}
+                    onNavigateToLibrary={() => setActiveTab('biblioteca-materiais')}
+                  />
+                ) : projectSubTab === 'otimizacao-barras' ? (
+                  <BarOptimizationModule 
+                    project={currentProject} 
+                    pieces={draftPieces} 
+                    onNavigateToCutList={() => setProjectSubTab('lista-corte')}
+                    onNavigateToStructure={() => setProjectSubTab('estrutura')}
+                  />
+                ) : projectSubTab === 'lista-corte' ? (
+                  <CutListModule 
+                    project={currentProject} 
+                    pieces={draftPieces} 
+                    onNavigateToStructure={() => setProjectSubTab('estrutura')} 
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 w-full">
+                    {/* Left Column: Blueprint, Conversion Info, Project Structure */}
+                    <div className="lg:col-span-2 flex flex-col gap-6">
 
                 {/* VISUALIZATION AREA (RESERVED FOR FUTURE BLUEPRINT / INTERACTIVE DRAWING) */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-5">
@@ -1151,6 +1331,16 @@ export default function App() {
                         <p className="text-xs text-slate-500">Desenhe e configure divisões, travessas, folhas e reforços no quadro principal</p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          id="btn-ver-lista-corte-estrutura"
+                          type="button"
+                          onClick={() => setProjectSubTab('lista-corte')}
+                          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-4 py-2.5 rounded-xl transition duration-150 inline-flex items-center gap-1.5 shadow-md hover:scale-[1.02] cursor-pointer"
+                        >
+                          <Scissors className="w-4 h-4 stroke-[2.5]" />
+                          <span>✂️ Ver Lista de Corte</span>
+                        </button>
+
                         <button
                           id="btn-adicionar-preenchimento"
                           type="button"
@@ -1536,7 +1726,94 @@ export default function App() {
                 </div>
 
               </div>
+            </div>
+          )}
 
+            </motion.div>
+          )}
+
+          {/* TAB 3: BIBLIOTECA DE MATERIAIS (ET-006) */}
+          {activeTab === 'biblioteca-materiais' && (
+            <motion.div
+              key="materials-library"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <MaterialsLibraryModule />
+            </motion.div>
+          )}
+
+          {/* TAB 4: CENTRAL INTELIGENTE DE PREÇOS (ET-006A) */}
+          {activeTab === 'central-precos' && (
+            <motion.div
+              key="central-precos"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <PriceCenterModule onNavigateToBudget={() => {
+                if (currentProject) {
+                  setActiveTab('detalhes-projeto');
+                  setProjectSubTab('orcamento');
+                }
+              }} />
+            </motion.div>
+          )}
+
+          {/* TAB 5: MOTOR GEOMÉTRICO INTELIGENTE (ET-008A) */}
+          {activeTab === 'motor-geometrico' && (
+            <motion.div
+              key="motor-geometrico"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <GeometricEngineModule />
+            </motion.div>
+          )}
+
+          {/* TAB 6: DESENHO INTELIGENTE LIVRE (ET-008B) */}
+          {activeTab === 'desenho-livre' && (
+            <motion.div
+              key="desenho-livre"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <FreeDrawingModule 
+                project={currentProject} 
+                onUpdateProject={handleSaveActiveProject} 
+              />
+            </motion.div>
+          )}
+
+          {/* TAB 7: ASSISTENTE INTELIGENTE DE ESTRUTURAS (ET-008C) */}
+          {activeTab === 'assistente-estruturas' && (
+            <motion.div
+              key="assistente-estruturas"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <StructureAssistantModule
+                project={currentProject}
+                onGenerateAndOpenDrawing={handleGenerateAndOpenDrawing}
+                onOpenFreeDrawingDirectly={() => {
+                  setActiveTab('desenho-livre');
+                  setProjectSubTab('desenho-livre');
+                }}
+              />
             </motion.div>
           )}
 
@@ -1718,9 +1995,20 @@ export default function App() {
                     }}
                     className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800 cursor-pointer"
                   >
-                    {PRESET_PROFILES.map((profile) => (
-                      <option key={profile} value={profile}>{profile}</option>
-                    ))}
+                    {materialProfiles.length > 0 ? (
+                      materialProfiles.map((m) => {
+                        const profileLabel = m.name.endsWith('mm') ? m.name : `${m.name} mm`;
+                        return (
+                          <option key={m.id} value={profileLabel}>
+                            {m.name} ({m.widthMm}x{m.heightMm}x{m.wallThicknessMm}mm)
+                          </option>
+                        );
+                      })
+                    ) : (
+                      PRESET_PROFILES.map((profile) => (
+                        <option key={profile} value={profile}>{profile}</option>
+                      ))
+                    )}
                     <option value="custom">Outro Perfil (Personalizado)...</option>
                   </select>
 
@@ -1880,16 +2168,23 @@ export default function App() {
                         onChange={(e) => setPieceProfile(e.target.value)}
                         className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800 cursor-pointer"
                       >
-                        {PRESET_PROFILES.map((profile) => (
-                          <option key={profile} value={profile}>{profile}</option>
-                        ))}
-                        {pieceProfile && !PRESET_PROFILES.includes(pieceProfile) && (
+                        {materialProfiles.length > 0 ? (
+                          materialProfiles.map((m) => {
+                            const profileLabel = m.name.endsWith('mm') ? m.name : `${m.name} mm`;
+                            return (
+                              <option key={m.id} value={profileLabel}>
+                                {m.name} ({m.widthMm}x{m.heightMm}x{m.wallThicknessMm}mm)
+                              </option>
+                            );
+                          })
+                        ) : (
+                          PRESET_PROFILES.map((profile) => (
+                            <option key={profile} value={profile}>{profile}</option>
+                          ))
+                        )}
+                        {pieceProfile && !materialProfiles.some(m => `${m.name} mm` === pieceProfile || m.name === pieceProfile) && (
                           <option value={pieceProfile}>{pieceProfile} (Do Projeto)</option>
                         )}
-                        <option value="Metalon 40x40 mm">Metalon 40x40 mm</option>
-                        <option value="Metalon 50x50 mm">Metalon 50x50 mm</option>
-                        <option value="Ferro Chato 1x1/8">Ferro Chato 1x1/8</option>
-                        <option value="Perfil U 2 polegadas">Perfil U 2"</option>
                       </select>
                     </div>
                   </div>
@@ -2574,7 +2869,84 @@ export default function App() {
             </motion.div>
           </div>
         )}
+
+        {/* DELETE PROJECT CONFIRMATION MODAL */}
+        {projectToDelete && (
+          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4"
+            >
+              <div className="flex items-center space-x-3 text-red-600">
+                <div className="p-3 bg-red-100 rounded-xl">
+                  <Trash2 className="w-6 h-6 stroke-[2]" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 font-display">Excluir Projeto</h3>
+                  <p className="text-xs text-slate-500 font-mono">{projectToDelete.name}</p>
+                </div>
+              </div>
+
+              <div className="bg-red-50/70 border border-red-200 rounded-xl p-4 text-xs text-red-950 space-y-1">
+                <p className="font-bold text-sm text-red-950">
+                  Tem certeza que deseja excluir este projeto?
+                </p>
+                <p className="text-red-700">
+                  Esta ação não poderá ser desfeita.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+                <button
+                  id="btn-cancelar-excluir-projeto"
+                  type="button"
+                  onClick={() => setProjectToDelete(null)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  id="btn-confirmar-excluir-projeto"
+                  type="button"
+                  onClick={confirmDeleteProject}
+                  className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition shadow-sm cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Excluir Projeto</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
+
+      {/* MOBILE FIXED BOTTOM NAVIGATION BAR (md:hidden) */}
+      <MobileBottomNav
+        activeTab={activeTab}
+        onSelectTab={(tab) => {
+          setActiveTab(tab as any);
+          if (tab === 'detalhes-projeto' && !currentProject && projects.length > 0) {
+            setCurrentProject(projects[0]);
+          }
+        }}
+        onOpenQuickAction={() => setIsQuickFabOpen(true)}
+        onOpenMoreMenu={() => setIsQuickFabOpen(true)}
+      />
+
+      {/* QUICK ACTION FAB MODAL / BOTTOM SHEET */}
+      <QuickActionFabModal
+        isOpen={isQuickFabOpen}
+        onClose={() => setIsQuickFabOpen(false)}
+        onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
+        onSelectStructureType={(typeId) => {
+          setActiveTab('assistente-estruturas');
+        }}
+        onOpenFreeDrawing={() => {
+          setActiveTab('desenho-livre');
+        }}
+      />
     </div>
   );
 }

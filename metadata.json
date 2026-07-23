@@ -1,6 +1,6 @@
 {
   "name": "Serralheria Projetos",
-  "description": "Ferramenta de apoio para serralheiros para criar projetos com medidas e perfis de quadros principais.",
+  "description": "Aplicativo completo para serralherias com suporte a projetos, desenhos 2D, biblioteca de materiais, lista de corte, otimização de barras, orçamento inteligente e central de preços.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

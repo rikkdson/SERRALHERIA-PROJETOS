@@ -24,3 +24,80 @@
   background-size: 20px 20px;
 }
 
+/* @media print styles for ET-004A Cut List printing */
+@media print {
+  @page {
+    margin: 12mm 15mm 12mm 15mm;
+    size: portrait;
+  }
+
+  /* Hide interactive elements, navigation, buttons, search, filters */
+  nav,
+  header,
+  footer,
+  button,
+  input,
+  select,
+  .no-print,
+  .print\:hidden,
+  [role="dialog"] {
+    display: none !important;
+  }
+
+  body, html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 10pt !important;
+    font-family: Arial, Helvetica, sans-serif !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .print\:block {
+    display: block !important;
+  }
+
+  .print\:table {
+    display: table !important;
+  }
+
+  /* Force background colors and colors to print accurately */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 15px !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  th, td {
+    border: 1px solid #64748b !important;
+    padding: 5px 8px !important;
+    color: #000000 !important;
+  }
+
+  th {
+    background-color: #f1f5f9 !important;
+    font-weight: bold !important;
+  }
+
+  .print-page-break {
+    page-break-before: always;
+  }
+}
+
