@@ -99,62 +99,7 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
             <span>Projetos</span>
           </button>
 
-          {/* ✏️ 2. DESENHO (Dropdown) */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => toggleDropdown('desenho')}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'assistente-estruturas' || activeTab === 'desenho-livre'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm font-extrabold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Pencil className="w-4 h-4 text-amber-400" />
-              <span>Desenho</span>
-              <ChevronDown className="w-3.5 h-3.5 opacity-70" />
-            </button>
-
-            {openDropdown === 'desenho' && (
-              <div className="absolute top-full left-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 z-50 animate-fade-in">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectTab('assistente-estruturas');
-                    closeDropdowns();
-                  }}
-                  className="w-full text-left p-2.5 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 transition text-xs font-bold text-slate-200 cursor-pointer"
-                >
-                  <span className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
-                    ⚡
-                  </span>
-                  <div>
-                    <div className="text-white">Assistente de Estruturas</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Gerador Inteligente por Medidas</div>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectTab('desenho-livre');
-                    closeDropdowns();
-                  }}
-                  className="w-full text-left p-2.5 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 transition text-xs font-bold text-slate-200 cursor-pointer mt-1"
-                >
-                  <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
-                    ✏️
-                  </span>
-                  <div>
-                    <div className="text-white">Editor de Estruturas</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Editor de montagem de barras e peças</div>
-                  </div>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 📐 3. CÁLCULOS */}
+          {/* 📐 2. CÁLCULOS */}
           <button
             type="button"
             onClick={() => {
@@ -171,7 +116,7 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
             <span>Cálculos</span>
           </button>
 
-          {/* ✂️ 4. FABRICAÇÃO */}
+          {/* ✂️ 3. FABRICAÇÃO */}
           <button
             type="button"
             onClick={() => {
@@ -192,7 +137,7 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
             <span>Fabricação</span>
           </button>
 
-          {/* 💰 5. FINANCEIRO */}
+          {/* 💰 4. FINANCEIRO */}
           <button
             type="button"
             onClick={() => {
@@ -213,7 +158,7 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
             <span>Financeiro</span>
           </button>
 
-          {/* 📦 6. MATERIAIS */}
+          {/* 📦 5. MATERIAIS */}
           <button
             type="button"
             onClick={() => {

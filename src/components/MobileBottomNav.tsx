@@ -37,18 +37,18 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           <span className="text-[10px] font-mono tracking-tight">Projetos</span>
         </button>
 
-        {/* 2. ✏️ Desenho */}
+        {/* 2. 📐 Cálculos */}
         <button
           type="button"
-          onClick={() => onSelectTab('assistente-estruturas')}
+          onClick={() => onSelectTab('motor-geometrico')}
           className={`flex flex-col items-center justify-center w-14 py-1 rounded-xl transition cursor-pointer ${
-            activeTab === 'assistente-estruturas' || activeTab === 'desenho-livre'
+            activeTab === 'motor-geometrico'
               ? 'text-amber-400 font-bold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Pencil className="w-5 h-5 mb-0.5 stroke-[2.2]" />
-          <span className="text-[10px] font-mono tracking-tight">Desenho</span>
+          <Compass className="w-5 h-5 mb-0.5 stroke-[2.2]" />
+          <span className="text-[10px] font-mono tracking-tight">Cálculos</span>
         </button>
 
         {/* 3. ➕ Central Floating Action Button */}

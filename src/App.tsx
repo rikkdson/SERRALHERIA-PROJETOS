@@ -65,6 +65,7 @@ import { StructureAssistantModule } from './components/StructureAssistantModule'
 import { CategorizedHeaderNav } from './components/CategorizedHeaderNav';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { QuickActionFabModal } from './components/QuickActionFabModal';
+import { NewProjectWizardModal, StructureTypeId } from './components/NewProjectWizardModal';
 import { getMaterialProfiles, MATERIALS_UPDATED_EVENT } from './utils/materialsStore';
 
 // Initial pre-loaded projects for a premium, zero-friction first-use experience
@@ -129,8 +130,17 @@ export default function App() {
   // State variables
   const [projects, setProjects] = useState<MetalProject[]>([]);
   const [currentProject, setCurrentProject] = useState<MetalProject | null>(null);
-  const [activeTab, setActiveTab] = useState<'meus-projetos' | 'detalhes-projeto' | 'biblioteca-materiais' | 'central-precos' | 'motor-geometrico' | 'desenho-livre' | 'assistente-estruturas'>('assistente-estruturas');
+  const [activeTab, setActiveTab] = useState<'meus-projetos' | 'detalhes-projeto' | 'biblioteca-materiais' | 'central-precos' | 'motor-geometrico' | 'desenho-livre' | 'assistente-estruturas'>('meus-projetos');
   const [projectSubTab, setProjectSubTab] = useState<'estrutura' | 'desenho-livre' | 'lista-corte' | 'otimizacao-barras' | 'orcamento'>('estrutura');
+  const [wizardInitialType, setWizardInitialType] = useState<StructureTypeId | null>(null);
+
+  // Redirect legacy assistente-estruturas route to new wizard
+  useEffect(() => {
+    if (activeTab === 'assistente-estruturas') {
+      setActiveTab('meus-projetos');
+      setIsNewProjectModalOpen(true);
+    }
+  }, [activeTab]);
   
   // Material Profiles from Library (ET-006)
   const [materialProfiles, setMaterialProfiles] = useState<MaterialProfile[]>([]);
@@ -532,6 +542,18 @@ export default function App() {
 
     saveProjectsToLocalStorage(updatedProjects);
     setCurrentProject(updatedProj);
+  };
+
+  // Handler: Wizard project creation (ET-009B.2)
+  const handleWizardCreateProject = (newProj: MetalProject) => {
+    handleSaveActiveProject(newProj);
+    setCurrentProject(newProj);
+    setDraftPieces(newProj.pieces || []);
+    setActiveTab('detalhes-projeto');
+    setProjectSubTab('desenho-livre');
+    setIsNewProjectModalOpen(false);
+    setIsQuickFabOpen(false);
+    setWizardInitialType(null);
   };
 
   // Handler: Generate structure via assistant and navigate to Free Drawing
@@ -1235,6 +1257,8 @@ export default function App() {
                   <FreeDrawingModule
                     project={currentProject}
                     onUpdateProject={handleSaveActiveProject}
+                    onNavigateBack={() => setProjectSubTab('estrutura')}
+                    onCompleteDrawing={() => setProjectSubTab('lista-corte')}
                   />
                 ) : projectSubTab === 'orcamento' ? (
                   <BudgetModule 
@@ -1792,6 +1816,15 @@ export default function App() {
               <FreeDrawingModule 
                 project={currentProject} 
                 onUpdateProject={handleSaveActiveProject} 
+                onNavigateBack={() => setActiveTab('assistente-estruturas')}
+                onCompleteDrawing={() => {
+                  if (currentProject) {
+                    setActiveTab('detalhes-projeto');
+                    setProjectSubTab('lista-corte');
+                  } else {
+                    setActiveTab('assistente-estruturas');
+                  }
+                }}
               />
             </motion.div>
           )}
@@ -1828,68 +1861,16 @@ export default function App() {
         </div>
       </footer>
 
-      {/* MODAL 1: CREATE NEW PROJECT */}
-      <AnimatePresence>
-        {isNewProjectModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsNewProjectModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-            />
-            
-            {/* Dialog Content */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="relative bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 overflow-hidden"
-            >
-              <div className="bg-slate-900 px-6 py-4 border-b border-slate-800">
-                <h3 className="text-base font-bold text-white font-display">Criar Novo Projeto</h3>
-                <p className="text-xs text-slate-400">Insira um nome claro para identificar o projeto na oficina</p>
-              </div>
-
-              <form onSubmit={handleCreateProject} className="p-6 flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="input-nome-projeto" className="text-xs font-semibold text-slate-700">Nome do Projeto</label>
-                  <input
-                    id="input-nome-projeto"
-                    type="text"
-                    required
-                    placeholder="Ex: Portão da casa, Grade da janela"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                    autoFocus
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-3 mt-4">
-                  <button
-                    id="btn-cancelar-novo-projeto"
-                    type="button"
-                    onClick={() => setIsNewProjectModalOpen(false)}
-                    className="px-4 py-2 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition duration-150 cursor-pointer"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    id="btn-confirmar-novo-projeto"
-                    type="submit"
-                    className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition duration-150 shadow-md cursor-pointer"
-                  >
-                    Criar Projeto
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      {/* MODAL 1: UNIFIED NEW PROJECT WIZARD (ET-009B.2) */}
+      <NewProjectWizardModal
+        isOpen={isNewProjectModalOpen}
+        onClose={() => {
+          setIsNewProjectModalOpen(false);
+          setWizardInitialType(null);
+        }}
+        onCreateProject={handleWizardCreateProject}
+        initialType={wizardInitialType}
+      />
 
       {/* MODAL 2: ADD / EDIT FRAME CONFIGURATION (QUADRO PRINCIPAL) */}
       <AnimatePresence>
@@ -2939,12 +2920,20 @@ export default function App() {
       <QuickActionFabModal
         isOpen={isQuickFabOpen}
         onClose={() => setIsQuickFabOpen(false)}
-        onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
+        onOpenNewProjectModal={() => {
+          setIsQuickFabOpen(false);
+          setWizardInitialType(null);
+          setIsNewProjectModalOpen(true);
+        }}
         onSelectStructureType={(typeId) => {
-          setActiveTab('assistente-estruturas');
+          setIsQuickFabOpen(false);
+          setWizardInitialType(typeId as StructureTypeId);
+          setIsNewProjectModalOpen(true);
         }}
         onOpenFreeDrawing={() => {
-          setActiveTab('desenho-livre');
+          setIsQuickFabOpen(false);
+          setWizardInitialType('personalizada');
+          setIsNewProjectModalOpen(true);
         }}
       />
     </div>
