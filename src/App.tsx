@@ -2903,18 +2903,20 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* MOBILE FIXED BOTTOM NAVIGATION BAR (md:hidden) */}
-      <MobileBottomNav
-        activeTab={activeTab}
-        onSelectTab={(tab) => {
-          setActiveTab(tab as any);
-          if (tab === 'detalhes-projeto' && !currentProject && projects.length > 0) {
-            setCurrentProject(projects[0]);
-          }
-        }}
-        onOpenQuickAction={() => setIsQuickFabOpen(true)}
-        onOpenMoreMenu={() => setIsQuickFabOpen(true)}
-      />
+      {/* MOBILE FIXED BOTTOM NAVIGATION BAR (md:hidden) - HIDDEN IN MODO EDITOR */}
+      {!(activeTab === 'desenho-livre' || (activeTab === 'detalhes-projeto' && projectSubTab === 'desenho-livre')) && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            setActiveTab(tab as any);
+            if (tab === 'detalhes-projeto' && !currentProject && projects.length > 0) {
+              setCurrentProject(projects[0]);
+            }
+          }}
+          onOpenQuickAction={() => setIsQuickFabOpen(true)}
+          onOpenMoreMenu={() => setIsQuickFabOpen(true)}
+        />
+      )}
 
       {/* QUICK ACTION FAB MODAL / BOTTOM SHEET */}
       <QuickActionFabModal
