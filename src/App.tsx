@@ -40,7 +40,8 @@ import {
   Box,
   DollarSign,
   Compass,
-  Pencil
+  Pencil,
+  Code2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -128,6 +129,7 @@ const DEFAULT_PROJECTS: MetalProject[] = [
 
 export default function App() {
   // State variables
+  const [isDevMode, setIsDevMode] = useState<boolean>(false);
   const [projects, setProjects] = useState<MetalProject[]>([]);
   const [currentProject, setCurrentProject] = useState<MetalProject | null>(null);
   const [activeTab, setActiveTab] = useState<'meus-projetos' | 'detalhes-projeto' | 'biblioteca-materiais' | 'central-precos' | 'motor-geometrico' | 'desenho-livre' | 'assistente-estruturas'>('meus-projetos');
@@ -192,6 +194,8 @@ export default function App() {
   const [pieceThickness, setPieceThickness] = useState('');
   const [piecePosX, setPiecePosX] = useState('');
   const [piecePosY, setPiecePosY] = useState('');
+  const [pieceRefPos, setPieceRefPos] = useState<'topo' | 'centro' | 'base' | 'esquerda' | 'direita'>('topo');
+  const [pieceDistance, setPieceDistance] = useState('400');
   const [pieceOrientation, setPieceOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
   const [pieceAngle, setPieceAngle] = useState('0');
   const [pieceObservations, setPieceObservations] = useState('');
@@ -1106,6 +1110,20 @@ export default function App() {
 
                   <div className="flex items-center space-x-2">
                     <button
+                      type="button"
+                      onClick={() => setIsDevMode(!isDevMode)}
+                      className={`text-xs font-semibold px-3 py-2 rounded-xl border transition-all inline-flex items-center gap-1.5 cursor-pointer ${
+                        isDevMode
+                          ? 'bg-amber-500/10 text-amber-700 border-amber-300 font-bold shadow-sm'
+                          : 'bg-white text-slate-500 border-slate-200 hover:text-slate-800'
+                      }`}
+                      title="Alternar Modo Desenvolvedor (exibe diagnósticos e conversores técnicos)"
+                    >
+                      <Code2 className="w-3.5 h-3.5" />
+                      <span>Modo Dev: {isDevMode ? 'ON' : 'OFF'}</span>
+                    </button>
+
+                    <button
                       id="btn-excluir-projeto-ativo"
                       type="button"
                       onClick={() => setProjectToDelete(currentProject)}
@@ -1331,12 +1349,12 @@ export default function App() {
                   )}
                 </div>
 
-                {/* INFO BOX ON CONVERSIONS */}
-                {currentProject.frame && (
+                {/* INFO BOX ON CONVERSIONS (Modo Desenvolvedor ET-009D.4 ETAPA 06) */}
+                {isDevMode && currentProject.frame && (
                   <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-4 text-xs text-blue-900 flex items-start space-x-3">
                     <Info className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
                     <div>
-                      <h5 className="font-bold text-blue-950 font-mono uppercase tracking-wider mb-1">Conversor Técnico Interno</h5>
+                      <h5 className="font-bold text-blue-950 font-mono uppercase tracking-wider mb-1">Conversor Técnico Interno (Modo Dev)</h5>
                       <p className="leading-relaxed">
                         A medida original definida por você foi de <strong>{currentProject.frame.displayWidth} x {currentProject.frame.displayHeight} {currentProject.frame.displayUnit}</strong>.
                         O aplicativo converteu e salvou estas medidas internamente como <strong>{currentProject.frame.width} mm de largura por {currentProject.frame.height} mm de altura</strong> para garantir que os futuros cálculos de cortes, frestas, diagonais e dobras permaneçam estáveis, imunes a desvios métricos.
@@ -2170,65 +2188,59 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="border-t border-slate-100 pt-4">
-                    <h4 className="text-[10px] font-bold text-indigo-600 font-mono uppercase tracking-wider mb-3">
-                      Posicionamento e Dimensões ({currentProject.frame?.displayUnit})
+                  <div className="border-t border-slate-100 pt-4 space-y-4">
+                    <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Posicionamento
                     </h4>
                     
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {/* X position */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Onde deseja colocar? */}
                       <div className="flex flex-col gap-1.5">
-                        <label htmlFor="input-pos-x-peca" className="text-xs text-slate-600">Posição X ({currentProject.frame?.displayUnit})</label>
-                        <input
-                          id="input-pos-x-peca"
-                          type="text"
-                          required
-                          value={piecePosX}
-                          onChange={(e) => setPiecePosX(e.target.value)}
-                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-slate-700"
-                          title="Distância da lateral esquerda"
-                        />
+                        <label className="text-xs font-semibold text-slate-700">Onde deseja colocar?</label>
+                        <select
+                          value={pieceRefPos}
+                          onChange={(e) => {
+                            const val = e.target.value as any;
+                            setPieceRefPos(val);
+                            const fWidth = currentProject?.frame?.displayWidth || 1200;
+                            const fHeight = currentProject?.frame?.displayHeight || 2000;
+                            const dist = parseFloat(pieceDistance) || 0;
+                            if (val === 'topo') { setPiecePosY(dist.toString()); setPiecePosX('0'); }
+                            else if (val === 'centro') { setPiecePosY((fHeight / 2).toString()); setPiecePosX((fWidth / 2).toString()); }
+                            else if (val === 'base') { setPiecePosY(Math.max(0, fHeight - dist).toString()); setPiecePosX('0'); }
+                            else if (val === 'esquerda') { setPiecePosX(dist.toString()); setPiecePosY('0'); }
+                            else if (val === 'direita') { setPiecePosX(Math.max(0, fWidth - dist).toString()); setPiecePosY('0'); }
+                          }}
+                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-medium text-slate-800 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="topo">A partir do topo</option>
+                          <option value="centro">No centro da estrutura</option>
+                          <option value="base">A partir da base</option>
+                          <option value="esquerda">A partir da esquerda</option>
+                          <option value="direita">A partir da direita</option>
+                        </select>
                       </div>
 
-                      {/* Y position */}
+                      {/* Distância */}
                       <div className="flex flex-col gap-1.5">
-                        <label htmlFor="input-pos-y-peca" className="text-xs text-slate-600">Posição Y ({currentProject.frame?.displayUnit})</label>
+                        <label className="text-xs font-semibold text-slate-700">Distância ({currentProject.frame?.displayUnit || 'mm'})</label>
                         <input
-                          id="input-pos-y-peca"
-                          type="text"
-                          required
-                          value={piecePosY}
-                          onChange={(e) => setPiecePosY(e.target.value)}
-                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-slate-700"
-                          title="Distância do topo"
-                        />
-                      </div>
-
-                      {/* Length */}
-                      <div className="flex flex-col gap-1.5">
-                        <label htmlFor="input-comprimento-peca" className="text-xs text-slate-600">Comprimento ({currentProject.frame?.displayUnit})</label>
-                        <input
-                          id="input-comprimento-peca"
-                          type="text"
-                          required
-                          value={pieceLength}
-                          onChange={(e) => setPieceLength(e.target.value)}
-                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-slate-700"
-                          title="Extensão linear da barra"
-                        />
-                      </div>
-
-                      {/* Thickness/Profile Width */}
-                      <div className="flex flex-col gap-1.5">
-                        <label htmlFor="input-espessura-peca" className="text-xs text-slate-600">Espessura ({currentProject.frame?.displayUnit})</label>
-                        <input
-                          id="input-espessura-peca"
-                          type="text"
-                          required
-                          value={pieceThickness}
-                          onChange={(e) => setPieceThickness(e.target.value)}
-                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-slate-700"
-                          title="Espessura/Bitola do metal utilizado"
+                          type="number"
+                          min="0"
+                          value={pieceDistance}
+                          onChange={(e) => {
+                            const distStr = e.target.value;
+                            setPieceDistance(distStr);
+                            const fWidth = currentProject?.frame?.displayWidth || 1200;
+                            const fHeight = currentProject?.frame?.displayHeight || 2000;
+                            const dist = parseFloat(distStr) || 0;
+                            if (pieceRefPos === 'topo') setPiecePosY(dist.toString());
+                            else if (pieceRefPos === 'base') setPiecePosY(Math.max(0, fHeight - dist).toString());
+                            else if (pieceRefPos === 'esquerda') setPiecePosX(dist.toString());
+                            else if (pieceRefPos === 'direita') setPiecePosX(Math.max(0, fWidth - dist).toString());
+                          }}
+                          className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Ex: 400"
                         />
                       </div>
                     </div>

@@ -314,45 +314,18 @@ export const StructureAssistantModule: React.FC<StructureAssistantModuleProps> =
     };
 
     // GENERATE GEOMETRY BASED ON MODEL
-    if (selectedType === 'portao_abrir' || selectedType === 'portao_correr') {
-      // Outer Frame
+    if (
+      selectedType === 'portao_abrir' || 
+      selectedType === 'portao_correr' || 
+      selectedType === 'janela' || 
+      selectedType === 'grade' || 
+      selectedType === 'personalizada'
+    ) {
+      // Quadro externo SOMENTE (ET-009D.2A - Correção 01)
       addLine(0, 0, W, 0, mainProfileName, 'quadro_interno', 'Quadro Superior');
       addLine(W, 0, W, H, mainProfileName, 'quadro_interno', 'Quadro Direito');
       addLine(W, H, 0, H, mainProfileName, 'quadro_interno', 'Quadro Inferior');
       addLine(0, H, 0, 0, mainProfileName, 'quadro_interno', 'Quadro Esquerdo');
-
-      // Horizontal Travessas
-      const numTrav = Math.max(0, Number(travessas));
-      for (let i = 1; i <= numTrav; i++) {
-        const y = Math.round((i * H) / (numTrav + 1));
-        addLine(0, y, W, y, secondaryProfileName, 'travessa', `Travessa ${i}`);
-      }
-
-      // Vertical Montantes
-      const numMont = Math.max(0, Number(montantes));
-      for (let i = 1; i <= numMont; i++) {
-        const x = Math.round((i * W) / (numMont + 1));
-        addLine(x, 0, x, H, secondaryProfileName, 'coluna', `Montante ${i}`);
-      }
-
-      // Diagonal
-      if (possuiDiagonal) {
-        addLine(0, 0, W, H, secondaryProfileName, 'diagonal', 'Barra Diagonal de Trava');
-      }
-
-    } else if (selectedType === 'janela') {
-      // Outer Frame
-      addLine(0, 0, W, 0, perfilGeral, 'quadro_interno', 'Quadro Superior');
-      addLine(W, 0, W, H, perfilGeral, 'quadro_interno', 'Quadro Direito');
-      addLine(W, H, 0, H, perfilGeral, 'quadro_interno', 'Quadro Inferior');
-      addLine(0, H, 0, 0, perfilGeral, 'quadro_interno', 'Quadro Esquerdo');
-
-      // Leaf Divisions
-      const numDivs = Math.max(1, Number(divisoesJanela));
-      for (let i = 1; i < numDivs; i++) {
-        const x = Math.round((i * W) / numDivs);
-        addLine(x, 0, x, H, perfilGeral, 'divisao_vertical', `Divisão Folha ${i}`);
-      }
 
     } else if (selectedType === 'prateleira') {
       // Main Left & Right Columns

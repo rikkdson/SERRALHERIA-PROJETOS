@@ -41,7 +41,7 @@ import {
   Square,
   AlertTriangle
 } from 'lucide-react';
-import { MetalProject, FreeDrawingLine, FreeDrawingData, MaterialProfile } from '../types';
+import { MetalProject, FreeDrawingLine, FreeDrawingData, MaterialProfile, PieceConfig } from '../types';
 import { getMaterialProfiles } from '../utils/materialsStore';
 
 interface FreeDrawingModuleProps {
@@ -118,15 +118,16 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   // Delete confirmation modal state (Rule: Never delete directly without confirmation - Requirement 3)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
 
-  // Smart Piece Creation Configuration Modal States (ET-009B.1)
+  // Smart Piece Creation Configuration Modal States (ET-009B.1 / ET-009D.2)
   const [activeAddPieceType, setActiveAddPieceType] = useState<'travessa' | 'montante' | 'diagonal' | 'porta' | 'janela' | 'reforco' | null>(null);
+  const [addPieceProfile, setAddPieceProfile] = useState<string>('Metalon 20x20 Preto');
 
   // Horizontal Bar Config
-  const [horizRef, setHorizRef] = useState<'topo' | 'centro' | 'base'>('centro');
+  const [horizRef, setHorizRef] = useState<'topo' | 'centro' | 'base'>('topo');
   const [horizDist, setHorizDist] = useState<string>('400');
 
   // Vertical Bar Config
-  const [vertRef, setVertRef] = useState<'esquerda' | 'centro' | 'direita'>('centro');
+  const [vertRef, setVertRef] = useState<'esquerda' | 'centro' | 'direita'>('esquerda');
   const [vertDist, setVertDist] = useState<string>('600');
 
   // Diagonal Config
@@ -134,6 +135,10 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   const [diagFull, setDiagFull] = useState<boolean>(true);
   const [diagStartOffset, setDiagStartOffset] = useState<string>('0');
   const [diagEndOffset, setDiagEndOffset] = useState<string>('0');
+
+  // Reforço Config (ET-009D.2)
+  const [reforcoCorner, setReforcoCorner] = useState<'TL' | 'TR' | 'BR' | 'BL'>('TL');
+  const [reforcoSize, setReforcoSize] = useState<string>('250');
 
   // Door Config
   const [doorWidth, setDoorWidth] = useState<string>('800');
@@ -165,6 +170,16 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   const [isGroupProfileModalOpen, setIsGroupProfileModalOpen] = useState<boolean>(false);
   const [groupProfileInput, setGroupProfileInput] = useState<string>('');
   const [isGroupDeleteModalOpen, setIsGroupDeleteModalOpen] = useState<boolean>(false);
+
+  // Preenchimento Inteligente Automático Assistant States (ET-009D.1 / ET-009D.3)
+  const [isAutoFillModalOpen, setIsAutoFillModalOpen] = useState<boolean>(false);
+  const [autoFillStep, setAutoFillStep] = useState<1 | 2 | 3 | 4 | 'preview'>(1);
+  const [autoFillDirection, setAutoFillDirection] = useState<'vertical' | 'horizontal' | 'diagonal_asc' | 'diagonal_desc' | 'cross_x'>('vertical');
+  const [autoFillProfile, setAutoFillProfile] = useState<string>('Metalon 20x20');
+  const [autoFillSpacing, setAutoFillSpacing] = useState<string>('120');
+  const [autoFillSpacingType, setAutoFillSpacingType] = useState<'luz_livre' | 'centro_a_centro'>('luz_livre');
+  const [autoFillDistribution, setAutoFillDistribution] = useState<'center' | 'start' | 'end'>('center');
+  const [fabricationMode, setFabricationMode] = useState<'interromper' | 'continuo'>('interromper');
 
   // History for Undo / Redo
   const [history, setHistory] = useState<FreeDrawingLine[][]>([]);
@@ -218,6 +233,9 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     startMouseMm: { x: number; y: number };
     initialLine: FreeDrawingLine;
   } | null>(null);
+
+  // Post-add preenchimento prompt modal (ET-009D.4 ETAPA 02 & ETAPA 03)
+  const [postAddPromptModal, setPostAddPromptModal] = useState<boolean>(false);
 
   // Inspector Edit Inputs for Selected Line
   const [editLengthInput, setEditLengthInput] = useState<string>('');
@@ -518,6 +536,10 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
 
   // Load state from project on mount or project switch
   useEffect(() => {
+    if (project?.freeDrawing?.fabricationMode) {
+      setFabricationMode(project.freeDrawing.fabricationMode);
+    }
+
     if (project?.freeDrawing?.lines) {
       const loadedLines = project.freeDrawing.lines;
       const hash = JSON.stringify(loadedLines);
@@ -566,11 +588,13 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
         }, 60);
       });
     }
-  }, [project?.id, project?.freeDrawing?.updatedAt, project?.freeDrawing?.lines, handleCenterView, project?.frame, defaultProfile]);
+  }, [project?.id, project?.freeDrawing?.updatedAt, project?.freeDrawing?.lines, project?.freeDrawing?.fabricationMode, handleCenterView, project?.frame, defaultProfile]);
 
   // Save changes helper
-  const commitLinesState = useCallback((newLines: FreeDrawingLine[]) => {
+  const commitLinesState = useCallback((newLines: FreeDrawingLine[], overrideFabricationMode?: 'interromper' | 'continuo') => {
     setLines(newLines);
+
+    const activeMode = overrideFabricationMode || fabricationMode;
 
     // Push to undo history
     const newHistory = history.slice(0, historyIndex + 1);
@@ -582,12 +606,34 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     const drawData: FreeDrawingData = {
       lines: newLines,
       viewport: { zoom, panX: pan.x, panY: pan.y },
+      fabricationMode: activeMode,
       updatedAt: new Date().toISOString()
     };
 
     if (project && onUpdateProject) {
+      const mappedPieces: PieceConfig[] = newLines.map((line, idx) => {
+        const len = line.lengthMm || Math.round(Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
+        const isHoriz = Math.abs(line.y1 - line.y2) < 5;
+        return {
+          id: line.id || `pc-${idx}-${Date.now()}`,
+          name: `Peça ${idx + 1} (${line.profile || 'Metalon'})`,
+          type: 'perfil_personalizado',
+          profile: line.profile || 'Metalon 20x20',
+          length: len,
+          width: 20,
+          height: 20,
+          thickness: 1.2,
+          posX: Math.min(line.x1, line.x2),
+          posY: Math.min(line.y1, line.y2),
+          orientation: isHoriz ? 'horizontal' : 'vertical',
+          angle: line.angleDeg || 0,
+          observations: ''
+        };
+      });
+
       onUpdateProject({
         ...project,
+        pieces: mappedPieces,
         freeDrawing: drawData
       });
     }
@@ -595,7 +641,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     if (project?.id) {
       localStorage.setItem(`serralheria_freedraw_${project.id}`, JSON.stringify(drawData));
     }
-  }, [history, historyIndex, zoom, pan, project, onUpdateProject]);
+  }, [history, historyIndex, zoom, pan, project, onUpdateProject, fabricationMode]);
 
   // Helper to compute bounds of current structure
   const getStructureBounds = (currentLines: FreeDrawingLine[]) => {
@@ -650,32 +696,15 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     }
 
     if (pieceType === 'reforco') {
-      const { minX, minY } = getStructureBounds(lines);
-      const size = 300;
-      const len = Math.round(size * Math.SQRT2);
-      const now = Date.now();
-      const newLine: FreeDrawingLine = {
-        id: `reforco-${now}`,
-        x1: minX + size,
-        y1: minY,
-        x2: minX,
-        y2: minY + size,
-        lengthMm: len,
-        angleDeg: 135,
-        profile: defaultProfile
-      };
-      const updated = [...lines, newLine];
-      commitLinesState(updated);
-      setSelectedLineId(newLine.id);
-      setTimeout(() => handleCenterView(updated, true), 50);
+      setActiveAddPieceType('reforco');
       return;
     }
   };
 
-  // 1. ADICIONAR BARRA HORIZONTAL (ET-009B.1)
+  // 1. ADICIONAR BARRA HORIZONTAL (ET-009B.1 / ET-009D.2 / ET-009D.3)
   const handleConfirmAddHorizontalBar = () => {
     const { minX, maxX, minY, maxY, width } = getStructureBounds(lines);
-    const dist = parseFloat(horizDist) || 0;
+    const dist = Math.max(0, parseFloat(horizDist) || 0);
     let targetY = Math.round((minY + maxY) / 2);
 
     if (horizRef === 'topo') {
@@ -686,29 +715,47 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
       targetY = Math.round((minY + maxY) / 2) + dist;
     }
 
-    const now = Date.now();
-    const newLine: FreeDrawingLine = {
-      id: `travessa-${now}`,
-      x1: minX,
+    const profName = addPieceProfile || defaultProfile;
+    const pSize = getProfileThickness(profName);
+
+    const rawLine = {
+      x1: minX + pSize,
       y1: targetY,
-      x2: maxX,
+      x2: maxX - pSize,
       y2: targetY,
-      lengthMm: width,
-      angleDeg: 0,
-      profile: defaultProfile
+      profile: profName,
+      angleDeg: 0
     };
 
-    const updated = [...lines, newLine];
+    let newPieces: FreeDrawingLine[] = [];
+    if (fabricationMode === 'interromper') {
+      newPieces = splitLineByObstacles(rawLine, lines, 'travessa');
+    } else {
+      newPieces = [{
+        id: `travessa-${Date.now()}`,
+        x1: minX,
+        y1: targetY,
+        x2: maxX,
+        y2: targetY,
+        lengthMm: width,
+        angleDeg: 0,
+        profile: profName
+      }];
+    }
+
+    const updated = [...lines, ...newPieces];
     commitLinesState(updated);
-    setSelectedLineId(newLine.id);
+    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
     setActiveAddPieceType(null);
+    showToast(`Barra horizontal adicionada (${width}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
+    setPostAddPromptModal(true);
   };
 
-  // 2. ADICIONAR BARRA VERTICAL (ET-009B.1)
+  // 2. ADICIONAR BARRA VERTICAL (ET-009B.1 / ET-009D.2 / ET-009D.3)
   const handleConfirmAddVerticalBar = () => {
     const { minX, maxX, minY, maxY, height } = getStructureBounds(lines);
-    const dist = parseFloat(vertDist) || 0;
+    const dist = Math.max(0, parseFloat(vertDist) || 0);
     let targetX = Math.round((minX + maxX) / 2);
 
     if (vertRef === 'esquerda') {
@@ -719,76 +766,173 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
       targetX = Math.round((minX + maxX) / 2) + dist;
     }
 
-    const now = Date.now();
-    const newLine: FreeDrawingLine = {
-      id: `montante-${now}`,
+    const profName = addPieceProfile || defaultProfile;
+    const pSize = getProfileThickness(profName);
+
+    const rawLine = {
       x1: targetX,
-      y1: minY,
+      y1: minY + pSize,
       x2: targetX,
-      y2: maxY,
-      lengthMm: height,
-      angleDeg: 90,
-      profile: defaultProfile
+      y2: maxY - pSize,
+      profile: profName,
+      angleDeg: 90
     };
 
-    const updated = [...lines, newLine];
+    let newPieces: FreeDrawingLine[] = [];
+    if (fabricationMode === 'interromper') {
+      newPieces = splitLineByObstacles(rawLine, lines, 'montante');
+    } else {
+      newPieces = [{
+        id: `montante-${Date.now()}`,
+        x1: targetX,
+        y1: minY,
+        x2: targetX,
+        y2: maxY,
+        lengthMm: height,
+        angleDeg: 90,
+        profile: profName
+      }];
+    }
+
+    const updated = [...lines, ...newPieces];
     commitLinesState(updated);
-    setSelectedLineId(newLine.id);
+    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
     setActiveAddPieceType(null);
+    showToast(`Barra vertical adicionada (${height}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
+    setPostAddPromptModal(true);
   };
 
-  // 3. ADICIONAR DIAGONAL (ET-009B.1)
+  // 3. ADICIONAR DIAGONAL (ET-009B.1 / ET-009D.2 / ET-009D.3)
   const handleConfirmAddDiagonal = () => {
     const { minX, maxX, minY, maxY } = getStructureBounds(lines);
+    const profName = addPieceProfile || defaultProfile;
+    const pFrame = getProfileThickness(profName);
+
     const startOffset = diagFull ? 0 : (parseFloat(diagStartOffset) || 0);
     const endOffset = diagFull ? 0 : (parseFloat(diagEndOffset) || 0);
 
-    let x1 = minX, y1 = maxY, x2 = maxX, y2 = minY;
+    const innerMinX = minX + pFrame;
+    const innerMaxX = maxX - pFrame;
+    const innerMinY = minY + pFrame;
+    const innerMaxY = maxY - pFrame;
+
+    let x1 = innerMinX, y1 = innerMaxY, x2 = innerMaxX, y2 = innerMinY;
 
     if (diagType === 'BL_TR') {
       // ◢ (Bottom-left to Top-right)
-      x1 = minX + startOffset;
-      y1 = maxY;
-      x2 = maxX - endOffset;
-      y2 = minY;
+      x1 = innerMinX + startOffset;
+      y1 = innerMaxY;
+      x2 = innerMaxX - endOffset;
+      y2 = innerMinY;
     } else {
       // ◣ (Top-left to Bottom-right)
-      x1 = minX + startOffset;
-      y1 = minY;
-      x2 = maxX - endOffset;
-      y2 = maxY;
+      x1 = innerMinX + startOffset;
+      y1 = innerMinY;
+      x2 = innerMaxX - endOffset;
+      y2 = innerMaxY;
     }
+
+    // Clamp within structure bounds
+    x1 = Math.min(Math.max(x1, innerMinX), innerMaxX);
+    x2 = Math.min(Math.max(x2, innerMinX), innerMaxX);
+    y1 = Math.min(Math.max(y1, innerMinY), innerMaxY);
+    y2 = Math.min(Math.max(y2, innerMinY), innerMaxY);
 
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len = Math.round(Math.hypot(dx, dy));
     const angle = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
 
-    const now = Date.now();
-    const newLine: FreeDrawingLine = {
-      id: `diagonal-${now}`,
-      x1,
-      y1,
-      x2,
-      y2,
-      lengthMm: len,
-      angleDeg: angle,
-      profile: defaultProfile
+    const rawDiag = {
+      x1, y1, x2, y2,
+      profile: profName,
+      angleDeg: angle
     };
 
-    const updated = [...lines, newLine];
+    let newPieces: FreeDrawingLine[] = [];
+    if (fabricationMode === 'interromper') {
+      newPieces = splitLineByObstacles(rawDiag, lines, 'diagonal');
+    } else {
+      newPieces = [{
+        id: `diagonal-${Date.now()}`,
+        x1, y1, x2, y2,
+        lengthMm: len,
+        angleDeg: angle,
+        profile: profName
+      }];
+    }
+
+    const updated = [...lines, ...newPieces];
     commitLinesState(updated);
-    setSelectedLineId(newLine.id);
+    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
     setActiveAddPieceType(null);
+    showToast(`Diagonal adicionada (${len}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
+    setPostAddPromptModal(true);
   };
 
-  // 4. COLOCAR PORTA (ET-009B.1)
+  // 4. ADICIONAR REFORÇO (MÃO FRANCESA - ET-009D.2 / ET-009D.3)
+  const handleConfirmAddReinforcement = () => {
+    const { minX, maxX, minY, maxY } = getStructureBounds(lines);
+    const size = Math.max(50, parseFloat(reforcoSize) || 250);
+    const profName = addPieceProfile || defaultProfile;
+    const pFrame = getProfileThickness(profName);
+
+    const innerMinX = minX + pFrame;
+    const innerMaxX = maxX - pFrame;
+    const innerMinY = minY + pFrame;
+    const innerMaxY = maxY - pFrame;
+
+    let x1 = innerMinX + size, y1 = innerMinY, x2 = innerMinX, y2 = innerMinY + size, angle = 135;
+
+    if (reforcoCorner === 'TL') {
+      // ◤ Superior Esquerdo
+      x1 = innerMinX + size; y1 = innerMinY; x2 = innerMinX; y2 = innerMinY + size; angle = 135;
+    } else if (reforcoCorner === 'TR') {
+      // ◥ Superior Direito
+      x1 = innerMaxX - size; y1 = innerMinY; x2 = innerMaxX; y2 = innerMinY + size; angle = 45;
+    } else if (reforcoCorner === 'BR') {
+      // ◣ Inferior Direito
+      x1 = innerMaxX - size; y1 = innerMaxY; x2 = innerMaxX; y2 = innerMaxY - size; angle = 315;
+    } else if (reforcoCorner === 'BL') {
+      // ◢ Inferior Esquerdo
+      x1 = innerMinX + size; y1 = innerMaxY; x2 = innerMinX; y2 = innerMaxY - size; angle = 225;
+    }
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.round(Math.hypot(dx, dy));
+
+    const rawReforco = { x1, y1, x2, y2, profile: profName, angleDeg: angle };
+    let newPieces: FreeDrawingLine[] = [];
+    if (fabricationMode === 'interromper') {
+      newPieces = splitLineByObstacles(rawReforco, lines, 'reforco');
+    } else {
+      newPieces = [{
+        id: `reforco-${Date.now()}`,
+        x1, y1, x2, y2,
+        lengthMm: len,
+        angleDeg: angle,
+        profile: profName
+      }];
+    }
+
+    const updated = [...lines, ...newPieces];
+    commitLinesState(updated);
+    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
+    setActiveAddPieceType(null);
+    showToast(`Reforço de canto adicionado (${len}mm)!`);
+    setTimeout(() => handleCenterView(updated, true), 50);
+    setPostAddPromptModal(true);
+  };
+
+  // 5. COLOCAR PORTA (ET-009B.1 / ET-009D.2)
   const handleConfirmAddDoor = () => {
     const { minX, maxX, minY, maxY } = getStructureBounds(lines);
     const w = parseFloat(doorWidth) || 800;
     const h = parseFloat(doorHeight) || 2000;
+    const profName = addPieceProfile || defaultProfile;
 
     let startX = Math.round((minX + maxX) / 2 - w / 2);
     if (doorPos === 'esquerda') {
@@ -801,34 +945,36 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     const now = Date.now();
 
     const doorLines: FreeDrawingLine[] = [
-      { id: `porta-top-${now}`, x1: startX, y1: startY, x2: startX + w, y2: startY, lengthMm: w, angleDeg: 0, profile: defaultProfile },
-      { id: `porta-left-${now}`, x1: startX, y1: startY, x2: startX, y2: startY + h, lengthMm: h, angleDeg: 90, profile: defaultProfile },
-      { id: `porta-right-${now}`, x1: startX + w, y1: startY, x2: startX + w, y2: startY + h, lengthMm: h, angleDeg: 90, profile: defaultProfile },
+      { id: `porta-top-${now}`, x1: startX, y1: startY, x2: startX + w, y2: startY, lengthMm: w, angleDeg: 0, profile: profName },
+      { id: `porta-left-${now}`, x1: startX, y1: startY, x2: startX, y2: startY + h, lengthMm: h, angleDeg: 90, profile: profName },
+      { id: `porta-right-${now}`, x1: startX + w, y1: startY, x2: startX + w, y2: startY + h, lengthMm: h, angleDeg: 90, profile: profName },
     ];
 
     const updated = [...lines, ...doorLines];
     commitLinesState(updated);
     setSelectedLineId(doorLines[0].id);
     setActiveAddPieceType(null);
+    showToast("Porta adicionada à estrutura!");
     setTimeout(() => handleCenterView(updated, true), 50);
   };
 
-  // 5. COLOCAR JANELA (ET-009B.1)
+  // 6. COLOCAR JANELA (ET-009B.1 / ET-009D.2)
   const handleConfirmAddWindow = () => {
     const { minX, maxX, minY, maxY } = getStructureBounds(lines);
     const w = parseFloat(winWidth) || 1000;
     const h = parseFloat(winHeight) || 1000;
     const divs = Math.max(1, parseInt(winDivs) || 1);
+    const profName = addPieceProfile || defaultProfile;
 
     const startX = Math.round((minX + maxX) / 2 - w / 2);
     const startY = Math.round((minY + maxY) / 2 - h / 2);
     const now = Date.now();
 
     const winLines: FreeDrawingLine[] = [
-      { id: `janela-top-${now}`, x1: startX, y1: startY, x2: startX + w, y2: startY, lengthMm: w, angleDeg: 0, profile: defaultProfile },
-      { id: `janela-right-${now}`, x1: startX + w, y1: startY, x2: startX + w, y2: startY + h, lengthMm: h, angleDeg: 90, profile: defaultProfile },
-      { id: `janela-bottom-${now}`, x1: startX + w, y1: startY + h, x2: startX, y2: startY + h, lengthMm: w, angleDeg: 180, profile: defaultProfile },
-      { id: `janela-left-${now}`, x1: startX, y1: startY + h, x2: startX, y2: startY, lengthMm: h, angleDeg: 270, profile: defaultProfile },
+      { id: `janela-top-${now}`, x1: startX, y1: startY, x2: startX + w, y2: startY, lengthMm: w, angleDeg: 0, profile: profName },
+      { id: `janela-right-${now}`, x1: startX + w, y1: startY, x2: startX + w, y2: startY + h, lengthMm: h, angleDeg: 90, profile: profName },
+      { id: `janela-bottom-${now}`, x1: startX + w, y1: startY + h, x2: startX, y2: startY + h, lengthMm: w, angleDeg: 180, profile: profName },
+      { id: `janela-left-${now}`, x1: startX, y1: startY + h, x2: startX, y2: startY, lengthMm: h, angleDeg: 270, profile: profName },
     ];
 
     if (divs > 1) {
@@ -843,7 +989,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
           y2: startY + h,
           lengthMm: h,
           angleDeg: 90,
-          profile: defaultProfile
+          profile: profName
         });
       }
     }
@@ -1278,6 +1424,360 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     setIsGroupDeleteModalOpen(false);
     setActiveTool('select');
     showToast("Peças removidas com sucesso!");
+  };
+
+  // Helper to extract metallic profile thickness in mm
+  const getProfileThickness = useCallback((profName?: string): number => {
+    if (!profName) return 20;
+    const lower = profName.toLowerCase();
+    const match = lower.match(/(\d+)\s*x\s*(\d+)/);
+    if (match) {
+      return Math.max(parseFloat(match[1]), parseFloat(match[2])) || 20;
+    }
+    if (lower.includes('15x15')) return 15;
+    if (lower.includes('20x20')) return 20;
+    if (lower.includes('30x30') || lower.includes('30x20')) return 30;
+    if (lower.includes('40x40') || lower.includes('40x20')) return 40;
+    if (lower.includes('50x50') || lower.includes('50x30')) return 50;
+    if (lower.includes('60x40')) return 60;
+    if (lower.includes('80x40')) return 80;
+    return 20;
+  }, []);
+
+  // Split line at intersection points with existing lines (ET-009D.3 - Correção 02 & 03 & 05 & 06)
+  const splitLineByObstacles = useCallback((
+    rawLine: { x1: number; y1: number; x2: number; y2: number; profile: string; color?: string; angleDeg?: number },
+    obstacles: FreeDrawingLine[],
+    prefix: string
+  ): FreeDrawingLine[] => {
+    const x1 = rawLine.x1, y1 = rawLine.y1, x2 = rawLine.x2, y2 = rawLine.y2;
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenTotal = Math.hypot(dx, dy);
+    if (lenTotal < 15) return [];
+
+    const ts: number[] = [];
+
+    obstacles.forEach(obs => {
+      const ox1 = obs.x1, oy1 = obs.y1, ox2 = obs.x2, oy2 = obs.y2;
+      const denom = (x1 - x2) * (oy1 - oy2) - (y1 - y2) * (ox1 - ox2);
+      if (Math.abs(denom) < 0.0001) return;
+
+      const t = ((x1 - ox1) * (oy1 - oy2) - (y1 - oy1) * (ox1 - ox2)) / denom;
+      const u = ((x1 - ox1) * (y1 - y2) - (y1 - oy1) * (x1 - x2)) / denom;
+
+      if (t > 0.01 && t < 0.99 && u >= -0.05 && u <= 1.05) {
+        ts.push(t);
+      }
+    });
+
+    if (ts.length === 0) {
+      const angle = rawLine.angleDeg ?? Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+      return [{
+        id: `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        x1: Math.round(x1),
+        y1: Math.round(y1),
+        x2: Math.round(x2),
+        y2: Math.round(y2),
+        lengthMm: Math.round(lenTotal),
+        angleDeg: angle,
+        profile: rawLine.profile,
+        color: rawLine.color || '#10b981'
+      }];
+    }
+
+    ts.sort((a, b) => a - b);
+    const uniqueTs: number[] = [];
+    ts.forEach(t => {
+      if (uniqueTs.length === 0 || t - uniqueTs[uniqueTs.length - 1] > 0.01) {
+        uniqueTs.push(t);
+      }
+    });
+
+    const points = [
+      { x: x1, y: y1 },
+      ...uniqueTs.map(t => ({ x: x1 + t * dx, y: y1 + t * dy })),
+      { x: x2, y: y2 }
+    ];
+
+    const segments: FreeDrawingLine[] = [];
+    const baseAngle = rawLine.angleDeg ?? Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const pA = points[i];
+      const pB = points[i + 1];
+      const segLen = Math.round(Math.hypot(pB.x - pA.x, pB.y - pA.y));
+      if (segLen >= 15) {
+        segments.push({
+          id: `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          x1: Math.round(pA.x),
+          y1: Math.round(pA.y),
+          x2: Math.round(pB.x),
+          y2: Math.round(pB.y),
+          lengthMm: segLen,
+          angleDeg: baseAngle,
+          profile: rawLine.profile,
+          color: rawLine.color || '#10b981'
+        });
+      }
+    }
+
+    return segments;
+  }, []);
+
+  // Preenchimento Inteligente Automático Calculation Function (ET-009D.1 / ET-009D.3)
+  const calculateAutoFillLines = useCallback((
+    allLines: FreeDrawingLine[],
+    selectedIds: string[],
+    direction: 'vertical' | 'horizontal' | 'diagonal_asc' | 'diagonal_desc' | 'cross_x',
+    profileName: string,
+    spacingMm: number,
+    distribution: 'center' | 'start' | 'end',
+    spacingType: 'luz_livre' | 'centro_a_centro',
+    mode: 'interromper' | 'continuo'
+  ): FreeDrawingLine[] => {
+    // 1. Determine bounding box of selected frame or all lines
+    const targetLines = selectedIds.length > 0
+      ? allLines.filter(l => selectedIds.includes(l.id))
+      : allLines;
+
+    let minX = 0, minY = 0, maxX = 1000, maxY = 2000;
+    if (targetLines.length > 0) {
+      minX = Math.min(...targetLines.flatMap(l => [l.x1, l.x2]));
+      maxX = Math.max(...targetLines.flatMap(l => [l.x1, l.x2]));
+      minY = Math.min(...targetLines.flatMap(l => [l.y1, l.y2]));
+      maxY = Math.max(...targetLines.flatMap(l => [l.y1, l.y2]));
+    }
+
+    const W = Math.max(100, maxX - minX);
+    const H = Math.max(100, maxY - minY);
+
+    // Profile thickness
+    const pSize = getProfileThickness(profileName);
+    const pFrame = pSize; // Frame inner border offset
+
+    const obstacles = allLines.filter(l => {
+      if (selectedIds.length > 0 && selectedIds.includes(l.id)) return false;
+      return true;
+    });
+
+    const result: FreeDrawingLine[] = [];
+
+    if (direction === 'vertical') {
+      const availableW = W - 2 * pFrame;
+      if (availableW <= pSize) return [];
+
+      let pitch = 140; // Pitch center-to-center
+      if (spacingType === 'luz_livre') {
+        const clearGap = Math.max(10, spacingMm);
+        pitch = clearGap + pSize;
+      } else {
+        pitch = Math.max(pSize + 5, spacingMm);
+      }
+
+      const numBars = Math.max(1, Math.floor((availableW - (pitch - pSize)) / pitch));
+      const totalSpan = (numBars - 1) * pitch;
+
+      let startX = minX + pFrame + (pitch - pSize / 2);
+      if (distribution === 'center') {
+        startX = minX + pFrame + (availableW - totalSpan) / 2;
+      } else if (distribution === 'end') {
+        startX = maxX - pFrame - totalSpan - (availableW - totalSpan) / 2;
+      }
+
+      const xPositions: number[] = [];
+      for (let i = 0; i < numBars; i++) {
+        const posX = Math.round(startX + i * pitch);
+        if (posX > minX + pFrame && posX < maxX - pFrame) {
+          xPositions.push(posX);
+        }
+      }
+
+      xPositions.forEach(posX => {
+        const rawLine = {
+          x1: posX,
+          y1: minY + pFrame,
+          x2: posX,
+          y2: maxY - pFrame,
+          profile: profileName,
+          angleDeg: 90
+        };
+
+        if (mode === 'interromper') {
+          const segs = splitLineByObstacles(rawLine, obstacles, 'autofill_v');
+          result.push(...segs);
+        } else {
+          const len = Math.round(maxY - minY - 2 * pFrame);
+          result.push({
+            id: `autofill_v_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            x1: posX,
+            y1: minY + pFrame,
+            x2: posX,
+            y2: maxY - pFrame,
+            lengthMm: len,
+            angleDeg: 90,
+            profile: profileName,
+            color: '#10b981'
+          });
+        }
+      });
+
+    } else if (direction === 'horizontal') {
+      const availableH = H - 2 * pFrame;
+      if (availableH <= pSize) return [];
+
+      let pitch = 140;
+      if (spacingType === 'luz_livre') {
+        const clearGap = Math.max(10, spacingMm);
+        pitch = clearGap + pSize;
+      } else {
+        pitch = Math.max(pSize + 5, spacingMm);
+      }
+
+      const numBars = Math.max(1, Math.floor((availableH - (pitch - pSize)) / pitch));
+      const totalSpan = (numBars - 1) * pitch;
+
+      let startY = minY + pFrame + (pitch - pSize / 2);
+      if (distribution === 'center') {
+        startY = minY + pFrame + (availableH - totalSpan) / 2;
+      } else if (distribution === 'end') {
+        startY = maxY - pFrame - totalSpan - (availableH - totalSpan) / 2;
+      }
+
+      const yPositions: number[] = [];
+      for (let i = 0; i < numBars; i++) {
+        const posY = Math.round(startY + i * pitch);
+        if (posY > minY + pFrame && posY < maxY - pFrame) {
+          yPositions.push(posY);
+        }
+      }
+
+      yPositions.forEach(posY => {
+        const rawLine = {
+          x1: minX + pFrame,
+          y1: posY,
+          x2: maxX - pFrame,
+          y2: posY,
+          profile: profileName,
+          angleDeg: 0
+        };
+
+        if (mode === 'interromper') {
+          const segs = splitLineByObstacles(rawLine, obstacles, 'autofill_h');
+          result.push(...segs);
+        } else {
+          const len = Math.round(maxX - minX - 2 * pFrame);
+          result.push({
+            id: `autofill_h_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            x1: minX + pFrame,
+            y1: posY,
+            x2: maxX - pFrame,
+            y2: posY,
+            lengthMm: len,
+            angleDeg: 0,
+            profile: profileName,
+            color: '#10b981'
+          });
+        }
+      });
+
+    } else {
+      // Diagonals (diagonal_asc, diagonal_desc, cross_x)
+      const isAsc = direction === 'diagonal_asc' || direction === 'cross_x';
+      const isDesc = direction === 'diagonal_desc' || direction === 'cross_x';
+
+      const generateDiagonalSeries = (asc: boolean) => {
+        let pitch = 140;
+        if (spacingType === 'luz_livre') {
+          pitch = Math.max(10, spacingMm) + pSize;
+        } else {
+          pitch = Math.max(pSize + 5, spacingMm);
+        }
+        const step = pitch * Math.SQRT2;
+        const count = Math.max(1, Math.floor((W + H) / step));
+
+        for (let i = 1; i <= count; i++) {
+          const offset = i * step;
+          let x1 = minX + pFrame;
+          let y1 = asc ? (minY + pFrame + offset) : (maxY - pFrame - offset);
+          let x2 = minX + pFrame + offset;
+          let y2 = asc ? (minY + pFrame) : (maxY - pFrame);
+
+          if (x1 > maxX - pFrame || y2 > maxY - pFrame || y2 < minY + pFrame) continue;
+
+          const cx1 = Math.min(Math.max(x1, minX + pFrame), maxX - pFrame);
+          const cy1 = Math.min(Math.max(y1, minY + pFrame), maxY - pFrame);
+          const cx2 = Math.min(Math.max(x2, minX + pFrame), maxX - pFrame);
+          const cy2 = Math.min(Math.max(y2, minY + pFrame), maxY - pFrame);
+
+          const len = Math.round(Math.hypot(cx2 - cx1, cy2 - cy1));
+          if (len >= 30) {
+            const angle = Math.round(Math.atan2(cy2 - cy1, cx2 - cx1) * (180 / Math.PI));
+            const rawDiag = {
+              x1: Math.round(cx1),
+              y1: Math.round(cy1),
+              x2: Math.round(cx2),
+              y2: Math.round(cy2),
+              profile: profileName,
+              angleDeg: angle
+            };
+
+            if (mode === 'interromper') {
+              const segs = splitLineByObstacles(rawDiag, obstacles, 'autofill_d');
+              result.push(...segs);
+            } else {
+              result.push({
+                id: `autofill_d_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                ...rawDiag,
+                lengthMm: len,
+                color: '#10b981'
+              });
+            }
+          }
+        }
+      };
+
+      if (isAsc) generateDiagonalSeries(true);
+      if (isDesc) generateDiagonalSeries(false);
+    }
+
+    return result;
+  }, [getProfileThickness, splitLineByObstacles]);
+
+  const autoFillPreviewLines = useMemo(() => {
+    if (!isAutoFillModalOpen) return [];
+    const spacingNum = parseFloat(autoFillSpacing) || 120;
+    return calculateAutoFillLines(
+      lines,
+      selectedLineIds,
+      autoFillDirection,
+      autoFillProfile,
+      spacingNum,
+      autoFillDistribution,
+      autoFillSpacingType,
+      fabricationMode
+    );
+  }, [
+    isAutoFillModalOpen,
+    lines,
+    selectedLineIds,
+    autoFillDirection,
+    autoFillProfile,
+    autoFillSpacing,
+    autoFillDistribution,
+    autoFillSpacingType,
+    fabricationMode,
+    calculateAutoFillLines
+  ]);
+
+  const handleApplyAutoFill = () => {
+    if (autoFillPreviewLines.length === 0) {
+      showToast("Nenhuma peça calculada. Verifique o espaçamento e a estrutura.");
+      return;
+    }
+    const updated = [...lines, ...autoFillPreviewLines];
+    commitLinesState(updated);
+    setIsAutoFillModalOpen(false);
+    showToast(`✅ ${autoFillPreviewLines.length} peças de preenchimento adicionadas!`);
   };
 
   // Perform Actual Delete after User Confirms "SIM"
@@ -1827,6 +2327,20 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <span>➕ Adicionar Peça</span>
           </button>
 
+          {/* 1B. Preenchimento Automático (ET-009D.1) */}
+          <button
+            type="button"
+            id="btn-ferramenta-preenchimento-auto"
+            onClick={() => {
+              setAutoFillStep(1);
+              setIsAutoFillModalOpen(true);
+            }}
+            className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl transition duration-150 flex items-center gap-3 shadow-md cursor-pointer active:scale-[0.98]"
+          >
+            <Sparkles className="w-5 h-5 text-emerald-200" />
+            <span>🧩 Preenchimento Auto</span>
+          </button>
+
           {/* 2. Selecionar Área */}
           <button
             type="button"
@@ -2306,6 +2820,24 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   </g>
                 )}
 
+                {/* Preview of AutoFill Generated Lines (ET-009D.1) */}
+                {isAutoFillModalOpen && autoFillPreviewLines.map((pLine, idx) => (
+                  <g key={`autofill_preview_${idx}`}>
+                    <line
+                      x1={pLine.x1}
+                      y1={pLine.y1}
+                      x2={pLine.x2}
+                      y2={pLine.y2}
+                      stroke="#10b981"
+                      strokeWidth={3.5 / zoom}
+                      strokeDasharray={`${6 / zoom} ${4 / zoom}`}
+                      className="animate-pulse"
+                    />
+                    <circle cx={pLine.x1} cy={pLine.y1} r={4 / zoom} fill="#10b981" />
+                    <circle cx={pLine.x2} cy={pLine.y2} r={4 / zoom} fill="#10b981" />
+                  </g>
+                ))}
+
               </g>
             </svg>
 
@@ -2401,6 +2933,18 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
 
             {/* Quick Action Buttons */}
             <div className="flex items-center gap-1.5 pt-1 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoFillStep(1);
+                  setIsAutoFillModalOpen(true);
+                }}
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center gap-1 shrink-0 transition cursor-pointer shadow active:scale-95"
+              >
+                <Sparkles className="w-4 h-4 text-emerald-200" />
+                <span>🧩 Preenchimento Auto</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -2552,6 +3096,18 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <Box className="w-4 h-4 text-amber-400" />
             <span>Grupo ({selectedLineIds.length} peças)</span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setAutoFillStep(1);
+              setIsAutoFillModalOpen(true);
+            }}
+            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shrink-0 transition cursor-pointer shadow active:scale-95"
+          >
+            <Sparkles className="w-4 h-4 text-emerald-200" />
+            <span>🧩 Preenchimento Auto</span>
+          </button>
 
           <button
             type="button"
@@ -3033,6 +3589,30 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
 
               <button
                 type="button"
+                id="btn-add-autofill"
+                onClick={() => {
+                  setIsAddPieceModalOpen(false);
+                  setAutoFillStep(1);
+                  setIsAutoFillModalOpen(true);
+                }}
+                className="sm:col-span-2 bg-emerald-600 hover:bg-emerald-500 border border-emerald-700 rounded-xl p-4 text-left transition flex items-start space-x-3.5 shadow-md cursor-pointer group active:scale-[0.98] text-white"
+              >
+                <div className="p-3 bg-emerald-950 text-emerald-300 rounded-xl">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <span>🧩 Preenchimento Automático</span>
+                    <span className="bg-emerald-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-md uppercase">Novo</span>
+                  </h4>
+                  <p className="text-xs text-emerald-100 mt-1 font-medium">
+                    Preenche quadros com metalon vertical, horizontal ou diagonal sem desenhar peça por peça.
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
                 id="btn-add-barra-livre"
                 onClick={() => handleAddPiece('barra_livre')}
                 className="sm:col-span-2 bg-amber-500 hover:bg-amber-400 border border-amber-600 rounded-xl p-4 text-left transition flex items-start space-x-3.5 shadow-md cursor-pointer group active:scale-[0.98]"
@@ -3104,24 +3684,27 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
         </div>
       )}
 
-      {/* SUB-MODAL 1: ADICIONAR BARRA HORIZONTAL (REQUISITO 1) */}
+      {/* SUB-MODAL 1: ADICIONAR BARRA HORIZONTAL (ET-009D.2) */}
       {activeAddPieceType === 'travessa' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-amber-400" />
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl">
+                  <Layers className="w-5 h-5 stroke-[2.5]" />
+                </div>
                 <h3 className="text-base font-bold font-display">Adicionar Barra Horizontal</h3>
               </div>
-              <button onClick={() => setActiveAddPieceType(null)} className="p-1 text-slate-400 hover:text-white">
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-6 space-y-5 bg-slate-50">
+              {/* Onde deseja posicionar? */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">
-                  Onde deseja colocar?
+                <label className="text-xs font-bold text-slate-900 block mb-2">
+                  Onde deseja posicionar?
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   <button
@@ -3129,11 +3712,11 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setHorizRef('topo')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       horizRef === 'topo'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm'
+                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>⬆️</span>
+                    <span className="text-lg">○</span>
                     <span>A partir do topo</span>
                   </button>
 
@@ -3142,12 +3725,12 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setHorizRef('centro')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       horizRef === 'centro'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm'
+                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>⏺️</span>
-                    <span>A partir do centro</span>
+                    <span className="text-lg">○</span>
+                    <span>A partir do meio</span>
                   </button>
 
                   <button
@@ -3155,18 +3738,19 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setHorizRef('base')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       horizRef === 'base'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm'
+                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>⬇️</span>
+                    <span className="text-lg">○</span>
                     <span>A partir da base</span>
                   </button>
                 </div>
               </div>
 
+              {/* Informe a distância */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-1">
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
                   Informe a distância (mm):
                 </label>
                 <input
@@ -3176,9 +3760,86 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   placeholder="Ex: 400"
                   className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base font-bold font-mono text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-none"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  💡 A barra atravessará automaticamente toda a estrutura com o comprimento calculado pelo Mestre.
-                </p>
+              </div>
+
+              {/* Escolha o perfil */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Escolha o perfil:
+                </label>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Modo de fabricação */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Como deseja fabricar as interseções?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFabricationMode('interromper')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'interromper'
+                        ? 'bg-amber-950 border-amber-500 text-amber-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ◉ Interromper nas colunas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFabricationMode('continuo')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'continuo'
+                        ? 'bg-amber-950 border-amber-500 text-amber-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ◯ Barra contínua
+                  </button>
+                </div>
+              </div>
+
+              {/* RESUMO DE PRÉ-VISUALIZAÇÃO (ETAPA 08) */}
+              <div className="bg-slate-950 border border-amber-500/50 rounded-xl p-3.5 space-y-2 font-mono text-xs text-slate-200 shadow-lg">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                  <span className="font-extrabold text-amber-400 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Resumo do Mestre Serralheiro
+                  </span>
+                  <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded border border-amber-500/30">
+                    Travessa
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">PERFIL:</span>
+                    <span className="font-bold text-white truncate block">{addPieceProfile || defaultProfile}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">COMPRIMENTO ESTIMADO:</span>
+                    <span className="font-bold text-amber-400">{getStructureBounds(lines).width} mm</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">FABRICAÇÃO:</span>
+                    <span className="font-bold text-emerald-400">
+                      {fabricationMode === 'interromper' ? 'Interrompida' : 'Contínua'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">ALINHAMENTO:</span>
+                    <span className="font-bold text-white uppercase">{horizRef} ({horizDist || '0'}mm)</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -3186,41 +3847,45 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveAddPieceType(null)}
-                className="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
               >
-                Cancelar
+                ❌ Cancelar
               </button>
 
               <button
                 type="button"
                 onClick={handleConfirmAddHorizontalBar}
-                className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition cursor-pointer"
+                className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                Criar Barra Horizontal
+                <span>✔</span>
+                <span>Adicionar</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* SUB-MODAL 2: ADICIONAR BARRA VERTICAL (REQUISITO 2) */}
+      {/* SUB-MODAL 2: ADICIONAR BARRA VERTICAL (ET-009D.2) */}
       {activeAddPieceType === 'montante' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Box className="w-5 h-5 text-indigo-400" />
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl">
+                  <Box className="w-5 h-5 stroke-[2.5]" />
+                </div>
                 <h3 className="text-base font-bold font-display">Adicionar Barra Vertical</h3>
               </div>
-              <button onClick={() => setActiveAddPieceType(null)} className="p-1 text-slate-400 hover:text-white">
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-6 space-y-5 bg-slate-50">
+              {/* Onde deseja posicionar? */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">
-                  A partir de qual lado?
+                <label className="text-xs font-bold text-slate-900 block mb-2">
+                  Onde deseja posicionar?
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   <button
@@ -3228,12 +3893,12 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setVertRef('esquerda')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       vertRef === 'esquerda'
-                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>⬅️</span>
-                    <span>Esquerda</span>
+                    <span className="text-lg">○</span>
+                    <span>Pela esquerda</span>
                   </button>
 
                   <button
@@ -3241,12 +3906,12 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setVertRef('centro')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       vertRef === 'centro'
-                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>⏺️</span>
-                    <span>Centro</span>
+                    <span className="text-lg">○</span>
+                    <span>Pelo centro</span>
                   </button>
 
                   <button
@@ -3254,18 +3919,19 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setVertRef('direita')}
                     className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
                       vertRef === 'direita'
-                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>➡️</span>
-                    <span>Direita</span>
+                    <span className="text-lg">○</span>
+                    <span>Pela direita</span>
                   </button>
                 </div>
               </div>
 
+              {/* Informe a distância */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-1">
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
                   Informe a distância (mm):
                 </label>
                 <input
@@ -3275,9 +3941,86 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   placeholder="Ex: 600"
                   className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base font-bold font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  💡 A barra vertical será criada com a altura exata da estrutura.
-                </p>
+              </div>
+
+              {/* Escolha o perfil */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Escolha o perfil:
+                </label>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Modo de fabricação */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Como deseja fabricar as interseções?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFabricationMode('interromper')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'interromper'
+                        ? 'bg-indigo-950 border-indigo-500 text-indigo-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ◉ Interromper nas travessas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFabricationMode('continuo')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'continuo'
+                        ? 'bg-indigo-950 border-indigo-500 text-indigo-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ◯ Barra contínua
+                  </button>
+                </div>
+              </div>
+
+              {/* RESUMO DE PRÉ-VISUALIZAÇÃO (ETAPA 08) */}
+              <div className="bg-slate-950 border border-indigo-500/50 rounded-xl p-3.5 space-y-2 font-mono text-xs text-slate-200 shadow-lg">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                  <span className="font-extrabold text-indigo-400 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    Resumo do Mestre Serralheiro
+                  </span>
+                  <span className="text-[10px] bg-indigo-500/20 text-indigo-300 font-bold px-2 py-0.5 rounded border border-indigo-500/30">
+                    Coluna Vertical
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">PERFIL:</span>
+                    <span className="font-bold text-white truncate block">{addPieceProfile || defaultProfile}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">ALTURA ESTIMADA:</span>
+                    <span className="font-bold text-indigo-400">{getStructureBounds(lines).height} mm</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">FABRICAÇÃO:</span>
+                    <span className="font-bold text-emerald-400">
+                      {fabricationMode === 'interromper' ? 'Interrompida' : 'Contínua'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">ALINHAMENTO:</span>
+                    <span className="font-bold text-white uppercase">{vertRef} ({vertDist || '0'}mm)</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -3285,41 +4028,45 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveAddPieceType(null)}
-                className="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
               >
-                Cancelar
+                ❌ Cancelar
               </button>
 
               <button
                 type="button"
                 onClick={handleConfirmAddVerticalBar}
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer"
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                Criar Barra Vertical
+                <span>✔</span>
+                <span>Adicionar</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* SUB-MODAL 3: ADICIONAR DIAGONAL (REQUISITO 3) */}
+      {/* SUB-MODAL 3: ADICIONAR DIAGONAL (ET-009D.2) */}
       {activeAddPieceType === 'diagonal' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Spline className="w-5 h-5 text-sky-400" />
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl">
+                  <Spline className="w-5 h-5 stroke-[2.5]" />
+                </div>
                 <h3 className="text-base font-bold font-display">Adicionar Diagonal</h3>
               </div>
-              <button onClick={() => setActiveAddPieceType(null)} className="p-1 text-slate-400 hover:text-white">
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-6 space-y-5 bg-slate-50">
+              {/* Qual direção? */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">
-                  Qual diagonal deseja?
+                <label className="text-xs font-bold text-slate-900 block mb-2">
+                  Qual direção?
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -3332,7 +4079,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     }`}
                   >
                     <span className="text-3xl font-mono">◢</span>
-                    <span className="text-xs text-center">Baixo-Esquerda ➔ Cima-Direita</span>
+                    <span className="text-xs text-center font-bold">Esquerda → Direita</span>
                   </button>
 
                   <button
@@ -3345,99 +4092,262 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     }`}
                   >
                     <span className="text-3xl font-mono">◣</span>
-                    <span className="text-xs text-center">Cima-Esquerda ➔ Baixo-Direita</span>
+                    <span className="text-xs text-center font-bold">Direita → Esquerda</span>
                   </button>
                 </div>
               </div>
 
+              {/* Escolha o perfil */}
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">
-                  Diagonal completa?
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Escolha o perfil:
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDiagFull(true)}
-                    className={`py-2.5 px-4 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                      diagFull
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                        : 'bg-white text-slate-700 border-slate-200'
-                    }`}
-                  >
-                    ○ Sim (Ponta a ponta)
-                  </button>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
 
+              {/* Modo de fabricação */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Como deseja fabricar as interseções?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setDiagFull(false)}
-                    className={`py-2.5 px-4 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                      !diagFull
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                        : 'bg-white text-slate-700 border-slate-200'
+                    onClick={() => setFabricationMode('interromper')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'interromper'
+                        ? 'bg-sky-950 border-sky-500 text-sky-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
                     }`}
                   >
-                    ○ Não (Informar offsets)
+                    ◉ Interromper na travessa
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFabricationMode('continuo')}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer text-xs font-bold ${
+                      fabricationMode === 'continuo'
+                        ? 'bg-sky-950 border-sky-500 text-sky-300 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ◯ Barra contínua
                   </button>
                 </div>
               </div>
 
-              {!diagFull && (
-                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-slate-200">
+              {/* RESUMO DE PRÉ-VISUALIZAÇÃO (ETAPA 08) */}
+              <div className="bg-slate-950 border border-sky-500/50 rounded-xl p-3.5 space-y-2 font-mono text-xs text-slate-200 shadow-lg">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                  <span className="font-extrabold text-sky-400 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+                    <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+                    Resumo da Diagonal
+                  </span>
+                  <span className="text-[10px] bg-sky-500/20 text-sky-300 font-bold px-2 py-0.5 rounded border border-sky-500/30">
+                    Diagonal
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div>
-                    <label className="text-[11px] font-bold text-slate-700 block mb-1">Distância Início (mm):</label>
-                    <input
-                      type="number"
-                      value={diagStartOffset}
-                      onChange={(e) => setDiagStartOffset(e.target.value)}
-                      placeholder="0"
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold font-mono text-slate-900"
-                    />
+                    <span className="text-slate-400 text-[10px] block">PERFIL:</span>
+                    <span className="font-bold text-white truncate block">{addPieceProfile || defaultProfile}</span>
                   </div>
                   <div>
-                    <label className="text-[11px] font-bold text-slate-700 block mb-1">Distância Fim (mm):</label>
-                    <input
-                      type="number"
-                      value={diagEndOffset}
-                      onChange={(e) => setDiagEndOffset(e.target.value)}
-                      placeholder="0"
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold font-mono text-slate-900"
-                    />
+                    <span className="text-slate-400 text-[10px] block">COMPRIMENTO ESTIMADO:</span>
+                    <span className="font-bold text-sky-400">
+                      {Math.round(Math.hypot(getStructureBounds(lines).width, getStructureBounds(lines).height))} mm
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">FABRICAÇÃO:</span>
+                    <span className="font-bold text-emerald-400">
+                      {fabricationMode === 'interromper' ? 'Interrompida' : 'Contínua'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">CORTES EM GRAUS:</span>
+                    <span className="font-bold text-amber-300">Ajustado Automático</span>
                   </div>
                 </div>
-              )}
+              </div>
             </div>
 
             <div className="bg-white px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setActiveAddPieceType(null)}
-                className="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
               >
-                Cancelar
+                ❌ Cancelar
               </button>
 
               <button
                 type="button"
                 onClick={handleConfirmAddDiagonal}
-                className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition cursor-pointer"
+                className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                Criar Diagonal
+                <span>✔</span>
+                <span>Adicionar</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* SUB-MODAL 4: COLOCAR PORTA (REQUISITO 4) */}
+      {/* SUB-MODAL 4: ADICIONAR REFORÇO (ET-009D.2) */}
+      {activeAddPieceType === 'reforco' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl">
+                  <Compass className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <h3 className="text-base font-bold font-display">Adicionar Reforço</h3>
+              </div>
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 bg-slate-50">
+              {/* Qual canto? */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-2">
+                  Qual canto?
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setReforcoCorner('TL')}
+                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                      reforcoCorner === 'TL'
+                        ? 'bg-rose-600 text-white border-rose-700 shadow-sm font-extrabold'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xl">◤</span>
+                    <span>Superior Esquerdo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setReforcoCorner('TR')}
+                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                      reforcoCorner === 'TR'
+                        ? 'bg-rose-600 text-white border-rose-700 shadow-sm font-extrabold'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xl">◥</span>
+                    <span>Superior Direito</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setReforcoCorner('BL')}
+                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                      reforcoCorner === 'BL'
+                        ? 'bg-rose-600 text-white border-rose-700 shadow-sm font-extrabold'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xl">◢</span>
+                    <span>Inferior Esquerdo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setReforcoCorner('BR')}
+                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                      reforcoCorner === 'BR'
+                        ? 'bg-rose-600 text-white border-rose-700 shadow-sm font-extrabold'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="text-xl">◣</span>
+                    <span>Inferior Direito</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tamanho do reforço */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Tamanho do reforço (mm):
+                </label>
+                <input
+                  type="number"
+                  value={reforcoSize}
+                  onChange={(e) => setReforcoSize(e.target.value)}
+                  placeholder="Ex: 250"
+                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base font-bold font-mono text-slate-900 focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Escolha o perfil */}
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">
+                  Escolha o perfil:
+                </label>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-rose-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-[11px] text-rose-900 font-medium">
+                💡 O Mestre Serralheiro posiciona a mão francesa e ajusta a 45° no canto selecionado.
+              </div>
+            </div>
+
+            <div className="bg-white px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveAddPieceType(null)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
+              >
+                ❌ Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmAddReinforcement}
+                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+              >
+                <span>✔</span>
+                <span>Adicionar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-MODAL 5: COLOCAR PORTA (ET-009D.2) */}
       {activeAddPieceType === 'porta' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <DoorOpen className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold font-display">Colocar Porta</h3>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl">
+                  <DoorOpen className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <h3 className="text-base font-bold font-display">Adicionar Porta</h3>
               </div>
-              <button onClick={() => setActiveAddPieceType(null)} className="p-1 text-slate-400 hover:text-white">
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -3445,7 +4355,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <div className="p-6 space-y-4 bg-slate-50">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold font-mono text-slate-900 block mb-1">Largura (mm):</label>
+                  <label className="text-xs font-bold text-slate-900 block mb-1">Largura (mm):</label>
                   <input
                     type="number"
                     value={doorWidth}
@@ -3455,7 +4365,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold font-mono text-slate-900 block mb-1">Altura (mm):</label>
+                  <label className="text-xs font-bold text-slate-900 block mb-1">Altura (mm):</label>
                   <input
                     type="number"
                     value={doorHeight}
@@ -3467,14 +4377,27 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               </div>
 
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">Posição:</label>
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">Escolha o perfil:</label>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-2">Posição na estrutura:</label>
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setDoorPos('esquerda')}
                     className={`p-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center cursor-pointer ${
                       doorPos === 'esquerda'
-                        ? 'bg-emerald-600 text-white border-emerald-700'
+                        ? 'bg-emerald-600 text-white border-emerald-700 font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200'
                     }`}
                   >
@@ -3485,7 +4408,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setDoorPos('centro')}
                     className={`p-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center cursor-pointer ${
                       doorPos === 'centro'
-                        ? 'bg-emerald-600 text-white border-emerald-700'
+                        ? 'bg-emerald-600 text-white border-emerald-700 font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200'
                     }`}
                   >
@@ -3496,39 +4419,11 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                     onClick={() => setDoorPos('direita')}
                     className={`p-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center cursor-pointer ${
                       doorPos === 'direita'
-                        ? 'bg-emerald-600 text-white border-emerald-700'
+                        ? 'bg-emerald-600 text-white border-emerald-700 font-extrabold'
                         : 'bg-white text-slate-700 border-slate-200'
                     }`}
                   >
                     <span>Direita</span>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-2">Abrirá para:</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDoorOpenDir('esquerda')}
-                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
-                      doorOpenDir === 'esquerda'
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-200'
-                    }`}
-                  >
-                    <span>⬅ Esquerda</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDoorOpenDir('direita')}
-                    className={`p-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
-                      doorOpenDir === 'direita'
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-200'
-                    }`}
-                  >
-                    <span>➡ Direita</span>
                   </button>
                 </div>
               </div>
@@ -3538,33 +4433,86 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveAddPieceType(null)}
-                className="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
               >
-                Cancelar
+                ❌ Cancelar
               </button>
 
               <button
                 type="button"
                 onClick={handleConfirmAddDoor}
-                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer"
+                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                Criar Porta
+                <span>✔</span>
+                <span>Adicionar</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* SUB-MODAL 5: COLOCAR JANELA (REQUISITO 5) */}
+      {/* MODAL PROMPT APÓS ADICIONAR PEÇA (ET-009D.4 ETAPA 02 & ETAPA 03) */}
+      {postAddPromptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 text-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-800 p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold font-display text-white">Peça Adicionada com Sucesso!</h3>
+                <p className="text-xs text-slate-400">O Mestre Serralheiro atualizou o desenho da estrutura.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2.5">
+              <h4 className="text-xs font-bold text-amber-400 font-mono uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                Deseja preencher alguma área interna agora?
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Você pode preencher o vão do quadro automaticamente com gradil vertical, horizontal ou ripas usando o assistente inteligente do Mestre Serralheiro.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setPostAddPromptModal(false)}
+                className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer text-center"
+              >
+                Não, Concluir
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPostAddPromptModal(false);
+                  setAutoFillStep(1);
+                  setIsAutoFillModalOpen(true);
+                }}
+                className="px-4 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg transition cursor-pointer text-center flex items-center justify-center gap-1.5 active:scale-95"
+              >
+                <Sparkles className="w-4 h-4 stroke-[2.5]" />
+                <span>Sim, Preencher</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-MODAL 6: COLOCAR JANELA (ET-009D.2) */}
       {activeAddPieceType === 'janela' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Grid className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold font-display">Colocar Janela</h3>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-purple-500/20 text-purple-400 rounded-xl">
+                  <Grid className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <h3 className="text-base font-bold font-display">Adicionar Janela</h3>
               </div>
-              <button onClick={() => setActiveAddPieceType(null)} className="p-1 text-slate-400 hover:text-white">
+              <button onClick={() => setActiveAddPieceType(null)} className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -3572,7 +4520,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <div className="p-6 space-y-4 bg-slate-50">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold font-mono text-slate-900 block mb-1">Largura (mm):</label>
+                  <label className="text-xs font-bold text-slate-900 block mb-1">Largura (mm):</label>
                   <input
                     type="number"
                     value={winWidth}
@@ -3582,7 +4530,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold font-mono text-slate-900 block mb-1">Altura (mm):</label>
+                  <label className="text-xs font-bold text-slate-900 block mb-1">Altura (mm):</label>
                   <input
                     type="number"
                     value={winHeight}
@@ -3594,7 +4542,20 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               </div>
 
               <div>
-                <label className="text-xs font-bold font-mono text-slate-900 block mb-1">
+                <label className="text-xs font-bold text-slate-900 block mb-1.5">Escolha o perfil:</label>
+                <select
+                  value={addPieceProfile}
+                  onChange={(e) => setAddPieceProfile(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-purple-500 focus:outline-none cursor-pointer"
+                >
+                  {materialProfiles.map(p => (
+                    <option key={p.id} value={p.name}>▼ {p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-900 block mb-1">
                   Quantidade de divisões:
                 </label>
                 <input
@@ -3604,11 +4565,8 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                   value={winDivs}
                   onChange={(e) => setWinDivs(e.target.value)}
                   placeholder="1"
-                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base font-bold font-mono text-slate-900"
+                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-base font-bold font-mono text-slate-900"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  💡 A janela será gerada com o caixilho e divisões montadas automaticamente.
-                </p>
               </div>
             </div>
 
@@ -3616,17 +4574,18 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveAddPieceType(null)}
-                className="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
               >
-                Cancelar
+                ❌ Cancelar
               </button>
 
               <button
                 type="button"
                 onClick={handleConfirmAddWindow}
-                className="px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer"
+                className="px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                Criar Janela
+                <span>✔</span>
+                <span>Adicionar</span>
               </button>
             </div>
           </div>
@@ -4096,6 +5055,556 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                 SIM, Excluir Peças
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ASSISTENTE DE PREENCHIMENTO AUTOMÁTICO (ET-009D.1) */}
+      {isAutoFillModalOpen && (
+        <div className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-slate-900 border border-emerald-500/60 rounded-2xl w-full max-w-xl text-white shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh]">
+            
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-emerald-900 via-slate-900 to-slate-900 px-5 py-4 border-b border-emerald-500/40 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 bg-emerald-500 text-slate-950 rounded-xl font-bold shadow-md text-lg">🧩</span>
+                <div>
+                  <h3 className="font-bold text-base font-display text-white flex items-center gap-2">
+                    Preenchimento Inteligente Automático
+                  </h3>
+                  <span className="text-[11px] text-emerald-300 font-mono">Assistente do Mestre Serralheiro</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAutoFillModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                title="Fechar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Stepper Header Tabs */}
+            <div className="bg-slate-950/90 border-b border-slate-800 px-4 py-2 flex items-center justify-between gap-1 overflow-x-auto text-[11px] font-mono shrink-0">
+              <button
+                type="button"
+                onClick={() => setAutoFillStep(1)}
+                className={`px-3 py-1.5 rounded-lg font-bold shrink-0 transition flex items-center gap-1.5 cursor-pointer ${
+                  autoFillStep === 1 ? 'bg-emerald-500 text-slate-950 shadow' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <span>1. Direção</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAutoFillStep(2)}
+                className={`px-3 py-1.5 rounded-lg font-bold shrink-0 transition flex items-center gap-1.5 cursor-pointer ${
+                  autoFillStep === 2 ? 'bg-emerald-500 text-slate-950 shadow' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <span>2. Perfil</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAutoFillStep(3)}
+                className={`px-3 py-1.5 rounded-lg font-bold shrink-0 transition flex items-center gap-1.5 cursor-pointer ${
+                  autoFillStep === 3 ? 'bg-emerald-500 text-slate-950 shadow' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <span>3. Espaçamento</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAutoFillStep(4)}
+                className={`px-3 py-1.5 rounded-lg font-bold shrink-0 transition flex items-center gap-1.5 cursor-pointer ${
+                  autoFillStep === 4 ? 'bg-emerald-500 text-slate-950 shadow' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <span>4. Distribuição</span>
+              </button>
+            </div>
+
+            {/* Modal Scrollable Body */}
+            <div className="p-5 space-y-5 overflow-y-auto flex-1">
+
+              {/* PASSO 1: COMO DESEJA PREENCHER? */}
+              {autoFillStep === 1 && (
+                <div className="space-y-3.5 animate-fadeIn">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span className="text-emerald-400 font-mono font-black">PASSO 1</span>
+                      <span>Como deseja preencher o quadro?</span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Selecione a orientação das barras metálicas internas:
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {/* Barras Verticais */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoFillDirection('vertical');
+                        setAutoFillStep(2);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition flex items-center space-x-3 cursor-pointer group active:scale-[0.98] ${
+                        autoFillDirection === 'vertical'
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg'
+                          : 'bg-slate-800/80 border-slate-700 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <span className="text-2xl p-2 bg-emerald-900/80 rounded-xl group-hover:scale-110 transition shrink-0">⬇</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">Barras Verticais</div>
+                        <div className="text-[10px] text-slate-400">Montantes verticais em toda a largura</div>
+                      </div>
+                    </button>
+
+                    {/* Barras Horizontais */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoFillDirection('horizontal');
+                        setAutoFillStep(2);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition flex items-center space-x-3 cursor-pointer group active:scale-[0.98] ${
+                        autoFillDirection === 'horizontal'
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg'
+                          : 'bg-slate-800/80 border-slate-700 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <span className="text-2xl p-2 bg-emerald-900/80 rounded-xl group-hover:scale-110 transition shrink-0">➡</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">Barras Horizontais</div>
+                        <div className="text-[10px] text-slate-400">Travessas horizontais na altura</div>
+                      </div>
+                    </button>
+
+                    {/* Diagonal Esquerda -> Direita */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoFillDirection('diagonal_asc');
+                        setAutoFillStep(2);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition flex items-center space-x-3 cursor-pointer group active:scale-[0.98] ${
+                        autoFillDirection === 'diagonal_asc'
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg'
+                          : 'bg-slate-800/80 border-slate-700 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <span className="text-2xl p-2 bg-emerald-900/80 rounded-xl group-hover:scale-110 transition shrink-0">↗</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">Diagonal Esquerda → Direita</div>
+                        <div className="text-[10px] text-slate-400">Ripas inclinadas ascendentes</div>
+                      </div>
+                    </button>
+
+                    {/* Diagonal Direita -> Esquerda */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoFillDirection('diagonal_desc');
+                        setAutoFillStep(2);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition flex items-center space-x-3 cursor-pointer group active:scale-[0.98] ${
+                        autoFillDirection === 'diagonal_desc'
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg'
+                          : 'bg-slate-800/80 border-slate-700 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <span className="text-2xl p-2 bg-emerald-900/80 rounded-xl group-hover:scale-110 transition shrink-0">↖</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">Diagonal Direita → Esquerda</div>
+                        <div className="text-[10px] text-slate-400">Ripas inclinadas descendentes</div>
+                      </div>
+                    </button>
+
+                    {/* Cruzado (X) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoFillDirection('cross_x');
+                        setAutoFillStep(2);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition flex items-center space-x-3 cursor-pointer group active:scale-[0.98] sm:col-span-2 ${
+                        autoFillDirection === 'cross_x'
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg'
+                          : 'bg-slate-800/80 border-slate-700 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <span className="text-2xl p-2 bg-emerald-900/80 rounded-xl group-hover:scale-110 transition shrink-0">❌</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">Cruzado (X)</div>
+                        <div className="text-[10px] text-slate-400">Trama dupla em X para travamento total</div>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PASSO 2: ESCOLHER O PERFIL */}
+              {autoFillStep === 2 && (
+                <div className="space-y-3.5 animate-fadeIn">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span className="text-emerald-400 font-mono font-black">PASSO 2</span>
+                      <span>Escolher o perfil metálico</span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Qual perfil será utilizado para o preenchimento?
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-slate-300 block">Perfís Mais Utilizados:</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {[
+                        'Metalon 20x20 Preto',
+                        'Metalon 20x20 Galvanizado',
+                        'Metalon 30x20',
+                        'Metalon 40x20',
+                        'Barra Chata 1" x 1/8"',
+                        'Tubo Redondo 1"'
+                      ].map((pName) => (
+                        <button
+                          key={pName}
+                          type="button"
+                          onClick={() => {
+                            setAutoFillProfile(pName);
+                            setAutoFillStep(3);
+                          }}
+                          className={`p-3 rounded-xl border text-left text-xs font-bold transition cursor-pointer flex items-center justify-between ${
+                            autoFillProfile === pName
+                              ? 'bg-emerald-600 text-slate-950 border-emerald-400 font-black shadow-md'
+                              : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-750'
+                          }`}
+                        >
+                          <span>{pName}</span>
+                          {autoFillProfile === pName && <Check className="w-4 h-4 text-slate-950 stroke-[3]" />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <label className="text-xs font-mono text-slate-300 block mb-1">Outros da Biblioteca:</label>
+                    <select
+                      value={autoFillProfile}
+                      onChange={(e) => setAutoFillProfile(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      {materialProfiles.map((p) => (
+                        <option key={p.id} value={p.name}>
+                          {p.name} ({p.thicknessMm}mm) - R${p.costPerMeter}/m
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* PASSO 3: INFORME O ESPAÇAMENTO, TIPO DE ESPAÇAMENTO E MODO DE FABRICAÇÃO */}
+              {autoFillStep === 3 && (
+                <div className="space-y-3.5 animate-fadeIn">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span className="text-emerald-400 font-mono font-black">PASSO 3</span>
+                      <span>Espaçamento e Modo de Fabricação</span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Configure as regras de fabricação e a distância entre as barras:
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3.5">
+                    {/* Medida do Espaçamento */}
+                    <div>
+                      <label className="text-xs font-bold font-mono text-emerald-400 block mb-1">
+                        Espaçamento (mm):
+                      </label>
+                      <input
+                        type="number"
+                        value={autoFillSpacing}
+                        onChange={(e) => setAutoFillSpacing(e.target.value)}
+                        placeholder="Ex: 120"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xl font-bold font-mono text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Atalhos rápidos */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] font-mono text-slate-400">Atalhos rápidos:</span>
+                      {['80', '100', '120', '150', '200'].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setAutoFillSpacing(preset)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition cursor-pointer ${
+                            autoFillSpacing === preset
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          {preset} mm
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Tipo de Espaçamento (CORREÇÃO 04) */}
+                    <div className="pt-2 border-t border-slate-900">
+                      <label className="text-xs font-bold font-mono text-slate-300 block mb-2">
+                        Tipo de Espaçamento:
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAutoFillSpacingType('luz_livre')}
+                          className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                            autoFillSpacingType === 'luz_livre'
+                              ? 'bg-emerald-950/80 border-emerald-500 text-white shadow-md'
+                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                              ◉ Luz Livre
+                            </span>
+                            <span className="bg-emerald-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase">Recomendado</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400">Espaço livre entre as superfícies internas dos perfis</p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setAutoFillSpacingType('centro_a_centro')}
+                          className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                            autoFillSpacingType === 'centro_a_centro'
+                              ? 'bg-emerald-950/80 border-emerald-500 text-white shadow-md'
+                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-white">
+                              ◯ Centro a Centro
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400">Distância entre os eixos centrais das barras</p>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Modo de Fabricação (CORREÇÃO 03) */}
+                    <div className="pt-2 border-t border-slate-900">
+                      <label className="text-xs font-bold font-mono text-slate-300 block mb-2">
+                        Como deseja fabricar as interseções?
+                      </label>
+                      <div className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => setFabricationMode('interromper')}
+                          className={`w-full p-3 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                            fabricationMode === 'interromper'
+                              ? 'bg-emerald-950/80 border-emerald-500 text-white shadow-md'
+                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-2">
+                              <span>◉ Interromper o metalon na peça</span>
+                              <span className="bg-emerald-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase">Recomendado</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">A barra é dividida nas interseções em peças independentes (Gera itens separados na Lista de Corte)</div>
+                          </div>
+                          {fabricationMode === 'interromper' && <Check className="w-4 h-4 text-emerald-400 stroke-[3] shrink-0" />}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setFabricationMode('continuo')}
+                          className={`w-full p-3 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                            fabricationMode === 'continuo'
+                              ? 'bg-emerald-950/80 border-emerald-500 text-white shadow-md'
+                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-white">
+                              ◯ Manter o metalon contínuo
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">A barra permanece inteira atravessando os encontros sem divisão</div>
+                          </div>
+                          {fabricationMode === 'continuo' && <Check className="w-4 h-4 text-emerald-400 stroke-[3] shrink-0" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PASSO 4: DISTRIBUIÇÃO E PRÉ-VISUALIZAÇÃO (CORREÇÃO 07) */}
+              {autoFillStep === 4 && (
+                <div className="space-y-3.5 animate-fadeIn">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span className="text-emerald-400 font-mono font-black">PASSO 4</span>
+                      <span>Resumo e Confirmação</span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Confira o resumo completo antes de aplicar na estrutura:
+                    </p>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <label className="text-xs font-bold font-mono text-slate-300 block">Alinhamento no Quadro:</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAutoFillDistribution('center')}
+                        className={`p-2.5 rounded-xl border text-center transition cursor-pointer text-xs font-bold ${
+                          autoFillDistribution === 'center'
+                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-md'
+                            : 'bg-slate-800 border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        🎯 Centralizado
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAutoFillDistribution('start')}
+                        className={`p-2.5 rounded-xl border text-center transition cursor-pointer text-xs font-bold ${
+                          autoFillDistribution === 'start'
+                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-md'
+                            : 'bg-slate-800 border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        ⬅ Inicial
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAutoFillDistribution('end')}
+                        className={`p-2.5 rounded-xl border text-center transition cursor-pointer text-xs font-bold ${
+                          autoFillDistribution === 'end'
+                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-md'
+                            : 'bg-slate-800 border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        ➡ Final
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SUMMARY PREVIEW CARD (CORREÇÃO 07) */}
+                  <div className="bg-slate-950 border border-emerald-500/60 rounded-xl p-4 space-y-2.5 shadow-xl font-mono text-xs">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                      <span className="font-extrabold text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider text-[11px]">
+                        <Sparkles className="w-4 h-4 text-emerald-400" />
+                        Resumo do Preenchimento
+                      </span>
+                      <span className="bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-500/40">
+                        {autoFillPreviewLines.length} {autoFillPreviewLines.length === 1 ? 'peça' : 'peças'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">PERFIL</span>
+                        <span className="font-bold text-white truncate block">{autoFillProfile}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">ESPAÇAMENTO</span>
+                        <span className="font-bold text-amber-300">{autoFillSpacing} mm</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">TIPO DE ESPAÇAMENTO</span>
+                        <span className="font-bold text-white">
+                          {autoFillSpacingType === 'luz_livre' ? 'Luz Livre (Recomendado)' : 'Centro a Centro'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">MODO DE FABRICAÇÃO</span>
+                        <span className="font-bold text-emerald-400">
+                          {fabricationMode === 'interromper' ? 'Interromper (Recomendado)' : 'Manter Contínuo'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CARD DE RESULTADOS / INTELIGÊNCIA SERRALHEIRA */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-emerald-400" />
+                    <span>Peças Calculadas:</span>
+                  </span>
+                  <span className="font-bold text-emerald-400 text-sm">
+                    {autoFillPreviewLines.length} {autoFillPreviewLines.length === 1 ? 'barra' : 'barras'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs font-mono text-slate-300 border-t border-slate-900 pt-1.5">
+                  <span className="text-slate-400">Perfil Selecionado:</span>
+                  <span className="font-bold text-amber-300 truncate max-w-[180px]">{autoFillProfile}</span>
+                </div>
+
+                <div className="bg-emerald-950/80 border border-emerald-700/60 p-2.5 rounded-lg text-[11px] text-emerald-200 flex items-center gap-2">
+                  <span className="text-base">🛡️</span>
+                  <span><strong>Inteligência Ativa:</strong> O algoritmo contorna automaticamente portas, janelas, travessas e reforços existentes sem cortar peças.</span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="bg-slate-950 px-5 py-4 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsAutoFillModalOpen(false)}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                ❌ Cancelar
+              </button>
+
+              <div className="flex items-center gap-2">
+                {autoFillStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setAutoFillStep((s) => (s > 1 ? (s - 1) as any : 1))}
+                    className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
+                  >
+                    ✏ Alterar Configuração
+                  </button>
+                )}
+
+                {autoFillStep < 4 ? (
+                  <button
+                    type="button"
+                    onClick={() => setAutoFillStep((s) => (s < 4 ? (s + 1) as any : 4))}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>Próximo Passo</span>
+                    <span>➔</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleApplyAutoFill}
+                    className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-xl transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4 stroke-[3]" />
+                    <span>✔ Aplicar Preenchimento</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
           </div>
         </div>
       )}

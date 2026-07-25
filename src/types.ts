@@ -435,6 +435,7 @@ export interface FreeDrawingData {
   gridSizeMm?: number;
   snapToGrid?: boolean;
   snapToEndpoints?: boolean;
+  fabricationMode?: 'interromper' | 'continuo';
   updatedAt?: string;
 }
 
