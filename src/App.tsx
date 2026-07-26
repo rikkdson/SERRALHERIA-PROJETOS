@@ -179,6 +179,13 @@ export default function App() {
   const [hasStructuralChanges, setHasStructuralChanges] = useState(false);
   const [highlightedPieceId, setHighlightedPieceId] = useState<string | null>(null);
 
+  // Sync draftPieces whenever currentProject changes to maintain single source of truth
+  useEffect(() => {
+    if (currentProject?.pieces) {
+      setDraftPieces(currentProject.pieces);
+    }
+  }, [currentProject?.id, currentProject?.updatedAt]);
+
   // Piece configuration modal states
   const [isPieceModalOpen, setIsPieceModalOpen] = useState(false);
   const [pieceModalStep, setPieceModalStep] = useState<'select_type' | 'configure_form'>('select_type');

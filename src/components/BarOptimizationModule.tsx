@@ -99,8 +99,10 @@ export const BarOptimizationModule: React.FC<BarOptimizationModuleProps> = ({
   const rawCutItems = useMemo<RawCutItem[]>(() => {
     const items: RawCutItem[] = [];
 
-    // A) Quadro Principal (Outer Frame)
-    if (project.frame) {
+    const hasFrameInPieces = pieces.some(p => p.id.includes('frame') || p.id.includes('quadro') || p.id.includes('base_frame'));
+
+    // A) Quadro Principal (Outer Frame) - Fallback ONLY if frame pieces are not already in FabricationModel finalPieces
+    if (project.frame && !hasFrameInPieces && pieces.length === 0) {
       const frameProfile = project.frame.profile || 'Metalon 30x30 mm';
       
       // 2 horizontals

@@ -43,6 +43,9 @@ import {
 } from 'lucide-react';
 import { MetalProject, FreeDrawingLine, FreeDrawingData, MaterialProfile, PieceConfig } from '../types';
 import { getMaterialProfiles } from '../utils/materialsStore';
+import { getStructureBounds, getProfileThickness, computeGuideLine } from '../engines/geometryEngine';
+import { splitLineByObstacles, calculateAutoFillLines } from '../engines/intersectionEngine';
+import { processFabricationModel, runFabricationEngineValidationTests } from '../engines/fabricationEngine';
 
 interface FreeDrawingModuleProps {
   project: MetalProject | null;
@@ -536,6 +539,14 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
 
   // Load state from project on mount or project switch
   useEffect(() => {
+    // Run Motor Universal de Fabricação internal validation tests
+    try {
+      const testRes = runFabricationEngineValidationTests();
+      console.log("[FabricationEngine ET-011.2] Validation Results:", testRes.results);
+    } catch (e) {
+      console.error("[FabricationEngine ET-011.2] Test execution error:", e);
+    }
+
     if (project?.freeDrawing?.fabricationMode) {
       setFabricationMode(project.freeDrawing.fabricationMode);
     }
@@ -590,28 +601,29 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     }
   }, [project?.id, project?.freeDrawing?.updatedAt, project?.freeDrawing?.lines, project?.freeDrawing?.fabricationMode, handleCenterView, project?.frame, defaultProfile]);
 
-  // Save changes helper
+  // Save changes helper - passes all lines through Motor Universal de Fabricação (ET-011.2)
   const commitLinesState = useCallback((newLines: FreeDrawingLine[], overrideFabricationMode?: 'interromper' | 'continuo') => {
-    setLines(newLines);
-
     const activeMode = overrideFabricationMode || fabricationMode;
+    const processedLines = processFabricationModel(newLines, activeMode);
+
+    setLines(processedLines);
 
     // Push to undo history
     const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newLines);
+    newHistory.push(processedLines);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
 
     // Save to project / localStorage
     const drawData: FreeDrawingData = {
-      lines: newLines,
+      lines: processedLines,
       viewport: { zoom, panX: pan.x, panY: pan.y },
       fabricationMode: activeMode,
       updatedAt: new Date().toISOString()
     };
 
     if (project && onUpdateProject) {
-      const mappedPieces: PieceConfig[] = newLines.map((line, idx) => {
+      const mappedPieces: PieceConfig[] = processedLines.map((line, idx) => {
         const len = line.lengthMm || Math.round(Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
         const isHoriz = Math.abs(line.y1 - line.y2) < 5;
         return {
@@ -642,23 +654,6 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
       localStorage.setItem(`serralheria_freedraw_${project.id}`, JSON.stringify(drawData));
     }
   }, [history, historyIndex, zoom, pan, project, onUpdateProject, fabricationMode]);
-
-  // Helper to compute bounds of current structure
-  const getStructureBounds = (currentLines: FreeDrawingLine[]) => {
-    if (!currentLines || currentLines.length === 0) {
-      return { minX: 0, maxX: 1200, minY: 0, maxY: 2000, width: 1200, height: 2000 };
-    }
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    currentLines.forEach(l => {
-      minX = Math.min(minX, l.x1, l.x2);
-      maxX = Math.max(maxX, l.x1, l.x2);
-      minY = Math.min(minY, l.y1, l.y2);
-      maxY = Math.max(maxY, l.y1, l.y2);
-    });
-    const width = Math.max(200, maxX - minX);
-    const height = Math.max(200, maxY - minY);
-    return { minX, maxX, minY, maxY, width, height };
-  };
 
   // Smart Piece Assembler Trigger (ET-009B.1)
   const handleAddPiece = (pieceType: 'travessa' | 'montante' | 'diagonal' | 'porta' | 'janela' | 'coluna' | 'reforco' | 'barra_livre') => {
@@ -716,36 +711,21 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     }
 
     const profName = addPieceProfile || defaultProfile;
-    const pSize = getProfileThickness(profName);
 
-    const rawLine = {
-      x1: minX + pSize,
+    const rawLine: FreeDrawingLine = {
+      id: `travessa-${Date.now()}`,
+      x1: minX,
       y1: targetY,
-      x2: maxX - pSize,
+      x2: maxX,
       y2: targetY,
-      profile: profName,
-      angleDeg: 0
+      lengthMm: width,
+      angleDeg: 0,
+      profile: profName
     };
 
-    let newPieces: FreeDrawingLine[] = [];
-    if (fabricationMode === 'interromper') {
-      newPieces = splitLineByObstacles(rawLine, lines, 'travessa');
-    } else {
-      newPieces = [{
-        id: `travessa-${Date.now()}`,
-        x1: minX,
-        y1: targetY,
-        x2: maxX,
-        y2: targetY,
-        lengthMm: width,
-        angleDeg: 0,
-        profile: profName
-      }];
-    }
-
-    const updated = [...lines, ...newPieces];
+    const updated = [...lines, rawLine];
     commitLinesState(updated);
-    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
+    setSelectedLineId(rawLine.id);
     setActiveAddPieceType(null);
     showToast(`Barra horizontal adicionada (${width}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
@@ -767,36 +747,21 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     }
 
     const profName = addPieceProfile || defaultProfile;
-    const pSize = getProfileThickness(profName);
 
-    const rawLine = {
+    const rawLine: FreeDrawingLine = {
+      id: `montante-${Date.now()}`,
       x1: targetX,
-      y1: minY + pSize,
+      y1: minY,
       x2: targetX,
-      y2: maxY - pSize,
-      profile: profName,
-      angleDeg: 90
+      y2: maxY,
+      lengthMm: height,
+      angleDeg: 90,
+      profile: profName
     };
 
-    let newPieces: FreeDrawingLine[] = [];
-    if (fabricationMode === 'interromper') {
-      newPieces = splitLineByObstacles(rawLine, lines, 'montante');
-    } else {
-      newPieces = [{
-        id: `montante-${Date.now()}`,
-        x1: targetX,
-        y1: minY,
-        x2: targetX,
-        y2: maxY,
-        lengthMm: height,
-        angleDeg: 90,
-        profile: profName
-      }];
-    }
-
-    const updated = [...lines, ...newPieces];
+    const updated = [...lines, rawLine];
     commitLinesState(updated);
-    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
+    setSelectedLineId(rawLine.id);
     setActiveAddPieceType(null);
     showToast(`Barra vertical adicionada (${height}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
@@ -844,28 +809,17 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     const len = Math.round(Math.hypot(dx, dy));
     const angle = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
 
-    const rawDiag = {
+    const rawDiag: FreeDrawingLine = {
+      id: `diagonal-${Date.now()}`,
       x1, y1, x2, y2,
-      profile: profName,
-      angleDeg: angle
+      lengthMm: len,
+      angleDeg: angle,
+      profile: profName
     };
 
-    let newPieces: FreeDrawingLine[] = [];
-    if (fabricationMode === 'interromper') {
-      newPieces = splitLineByObstacles(rawDiag, lines, 'diagonal');
-    } else {
-      newPieces = [{
-        id: `diagonal-${Date.now()}`,
-        x1, y1, x2, y2,
-        lengthMm: len,
-        angleDeg: angle,
-        profile: profName
-      }];
-    }
-
-    const updated = [...lines, ...newPieces];
+    const updated = [...lines, rawDiag];
     commitLinesState(updated);
-    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
+    setSelectedLineId(rawDiag.id);
     setActiveAddPieceType(null);
     showToast(`Diagonal adicionada (${len}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
@@ -887,16 +841,12 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     let x1 = innerMinX + size, y1 = innerMinY, x2 = innerMinX, y2 = innerMinY + size, angle = 135;
 
     if (reforcoCorner === 'TL') {
-      // ◤ Superior Esquerdo
       x1 = innerMinX + size; y1 = innerMinY; x2 = innerMinX; y2 = innerMinY + size; angle = 135;
     } else if (reforcoCorner === 'TR') {
-      // ◥ Superior Direito
       x1 = innerMaxX - size; y1 = innerMinY; x2 = innerMaxX; y2 = innerMinY + size; angle = 45;
     } else if (reforcoCorner === 'BR') {
-      // ◣ Inferior Direito
       x1 = innerMaxX - size; y1 = innerMaxY; x2 = innerMaxX; y2 = innerMaxY - size; angle = 315;
     } else if (reforcoCorner === 'BL') {
-      // ◢ Inferior Esquerdo
       x1 = innerMinX + size; y1 = innerMaxY; x2 = innerMinX; y2 = innerMaxY - size; angle = 225;
     }
 
@@ -904,23 +854,17 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     const dy = y2 - y1;
     const len = Math.round(Math.hypot(dx, dy));
 
-    const rawReforco = { x1, y1, x2, y2, profile: profName, angleDeg: angle };
-    let newPieces: FreeDrawingLine[] = [];
-    if (fabricationMode === 'interromper') {
-      newPieces = splitLineByObstacles(rawReforco, lines, 'reforco');
-    } else {
-      newPieces = [{
-        id: `reforco-${Date.now()}`,
-        x1, y1, x2, y2,
-        lengthMm: len,
-        angleDeg: angle,
-        profile: profName
-      }];
-    }
+    const rawReforco: FreeDrawingLine = {
+      id: `reforco-${Date.now()}`,
+      x1, y1, x2, y2,
+      lengthMm: len,
+      angleDeg: angle,
+      profile: profName
+    };
 
-    const updated = [...lines, ...newPieces];
+    const updated = [...lines, rawReforco];
     commitLinesState(updated);
-    if (newPieces.length > 0) setSelectedLineId(newPieces[0].id);
+    setSelectedLineId(rawReforco.id);
     setActiveAddPieceType(null);
     showToast(`Reforço de canto adicionado (${len}mm)!`);
     setTimeout(() => handleCenterView(updated, true), 50);
@@ -1000,60 +944,6 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     setActiveAddPieceType(null);
     setTimeout(() => handleCenterView(updated, true), 50);
   };
-
-  // Compute guide line for Trena (ET-009C.1C)
-  const computeGuideLine = useCallback((refType: 'topo' | 'base' | 'esquerda' | 'direita' | 'centro', distMmStr: string, currentLines: FreeDrawingLine[]) => {
-    try {
-      const dist = Math.max(0, parseFloat(distMmStr) || 400);
-      const { minX, maxX, minY, maxY } = getStructureBounds(currentLines);
-
-      let gX1 = minX, gY1 = minY, gX2 = maxX, gY2 = maxY;
-      let type: 'horizontal' | 'vertical' = 'horizontal';
-
-      if (refType === 'topo') {
-        const guideY = minY + dist;
-        gX1 = minX - 100;
-        gY1 = guideY;
-        gX2 = maxX + 100;
-        gY2 = guideY;
-        type = 'horizontal';
-      } else if (refType === 'base') {
-        const guideY = maxY - dist;
-        gX1 = minX - 100;
-        gY1 = guideY;
-        gX2 = maxX + 100;
-        gY2 = guideY;
-        type = 'horizontal';
-      } else if (refType === 'esquerda') {
-        const guideX = minX + dist;
-        gX1 = guideX;
-        gY1 = minY - 100;
-        gX2 = guideX;
-        gY2 = maxY + 100;
-        type = 'vertical';
-      } else if (refType === 'direita') {
-        const guideX = maxX - dist;
-        gX1 = guideX;
-        gY1 = minY - 100;
-        gX2 = guideX;
-        gY2 = maxY + 100;
-        type = 'vertical';
-      } else if (refType === 'centro') {
-        const midY = Math.round((minY + maxY) / 2);
-        const guideY = midY + dist;
-        gX1 = minX - 100;
-        gY1 = guideY;
-        gX2 = maxX + 100;
-        gY2 = guideY;
-        type = 'horizontal';
-      }
-
-      return { x1: gX1, y1: gY1, x2: gX2, y2: gY2, type };
-    } catch (err) {
-      console.error("Erro ao calcular guia da trena:", err);
-      return null;
-    }
-  }, []);
 
   // Trigger Trena Tool (ET-009C.1C)
   const handleStartDistanceTool = () => {
@@ -1426,323 +1316,6 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     showToast("Peças removidas com sucesso!");
   };
 
-  // Helper to extract metallic profile thickness in mm
-  const getProfileThickness = useCallback((profName?: string): number => {
-    if (!profName) return 20;
-    const lower = profName.toLowerCase();
-    const match = lower.match(/(\d+)\s*x\s*(\d+)/);
-    if (match) {
-      return Math.max(parseFloat(match[1]), parseFloat(match[2])) || 20;
-    }
-    if (lower.includes('15x15')) return 15;
-    if (lower.includes('20x20')) return 20;
-    if (lower.includes('30x30') || lower.includes('30x20')) return 30;
-    if (lower.includes('40x40') || lower.includes('40x20')) return 40;
-    if (lower.includes('50x50') || lower.includes('50x30')) return 50;
-    if (lower.includes('60x40')) return 60;
-    if (lower.includes('80x40')) return 80;
-    return 20;
-  }, []);
-
-  // Split line at intersection points with existing lines (ET-009D.3 - Correção 02 & 03 & 05 & 06)
-  const splitLineByObstacles = useCallback((
-    rawLine: { x1: number; y1: number; x2: number; y2: number; profile: string; color?: string; angleDeg?: number },
-    obstacles: FreeDrawingLine[],
-    prefix: string
-  ): FreeDrawingLine[] => {
-    const x1 = rawLine.x1, y1 = rawLine.y1, x2 = rawLine.x2, y2 = rawLine.y2;
-    const dx = x2 - x1, dy = y2 - y1;
-    const lenTotal = Math.hypot(dx, dy);
-    if (lenTotal < 15) return [];
-
-    const ts: number[] = [];
-
-    obstacles.forEach(obs => {
-      const ox1 = obs.x1, oy1 = obs.y1, ox2 = obs.x2, oy2 = obs.y2;
-      const denom = (x1 - x2) * (oy1 - oy2) - (y1 - y2) * (ox1 - ox2);
-      if (Math.abs(denom) < 0.0001) return;
-
-      const t = ((x1 - ox1) * (oy1 - oy2) - (y1 - oy1) * (ox1 - ox2)) / denom;
-      const u = ((x1 - ox1) * (y1 - y2) - (y1 - oy1) * (x1 - x2)) / denom;
-
-      if (t > 0.01 && t < 0.99 && u >= -0.05 && u <= 1.05) {
-        ts.push(t);
-      }
-    });
-
-    if (ts.length === 0) {
-      const angle = rawLine.angleDeg ?? Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
-      return [{
-        id: `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        x1: Math.round(x1),
-        y1: Math.round(y1),
-        x2: Math.round(x2),
-        y2: Math.round(y2),
-        lengthMm: Math.round(lenTotal),
-        angleDeg: angle,
-        profile: rawLine.profile,
-        color: rawLine.color || '#10b981'
-      }];
-    }
-
-    ts.sort((a, b) => a - b);
-    const uniqueTs: number[] = [];
-    ts.forEach(t => {
-      if (uniqueTs.length === 0 || t - uniqueTs[uniqueTs.length - 1] > 0.01) {
-        uniqueTs.push(t);
-      }
-    });
-
-    const points = [
-      { x: x1, y: y1 },
-      ...uniqueTs.map(t => ({ x: x1 + t * dx, y: y1 + t * dy })),
-      { x: x2, y: y2 }
-    ];
-
-    const segments: FreeDrawingLine[] = [];
-    const baseAngle = rawLine.angleDeg ?? Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
-
-    for (let i = 0; i < points.length - 1; i++) {
-      const pA = points[i];
-      const pB = points[i + 1];
-      const segLen = Math.round(Math.hypot(pB.x - pA.x, pB.y - pA.y));
-      if (segLen >= 15) {
-        segments.push({
-          id: `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          x1: Math.round(pA.x),
-          y1: Math.round(pA.y),
-          x2: Math.round(pB.x),
-          y2: Math.round(pB.y),
-          lengthMm: segLen,
-          angleDeg: baseAngle,
-          profile: rawLine.profile,
-          color: rawLine.color || '#10b981'
-        });
-      }
-    }
-
-    return segments;
-  }, []);
-
-  // Preenchimento Inteligente Automático Calculation Function (ET-009D.1 / ET-009D.3)
-  const calculateAutoFillLines = useCallback((
-    allLines: FreeDrawingLine[],
-    selectedIds: string[],
-    direction: 'vertical' | 'horizontal' | 'diagonal_asc' | 'diagonal_desc' | 'cross_x',
-    profileName: string,
-    spacingMm: number,
-    distribution: 'center' | 'start' | 'end',
-    spacingType: 'luz_livre' | 'centro_a_centro',
-    mode: 'interromper' | 'continuo'
-  ): FreeDrawingLine[] => {
-    // 1. Determine bounding box of selected frame or all lines
-    const targetLines = selectedIds.length > 0
-      ? allLines.filter(l => selectedIds.includes(l.id))
-      : allLines;
-
-    let minX = 0, minY = 0, maxX = 1000, maxY = 2000;
-    if (targetLines.length > 0) {
-      minX = Math.min(...targetLines.flatMap(l => [l.x1, l.x2]));
-      maxX = Math.max(...targetLines.flatMap(l => [l.x1, l.x2]));
-      minY = Math.min(...targetLines.flatMap(l => [l.y1, l.y2]));
-      maxY = Math.max(...targetLines.flatMap(l => [l.y1, l.y2]));
-    }
-
-    const W = Math.max(100, maxX - minX);
-    const H = Math.max(100, maxY - minY);
-
-    // Profile thickness
-    const pSize = getProfileThickness(profileName);
-    const pFrame = pSize; // Frame inner border offset
-
-    const obstacles = allLines.filter(l => {
-      if (selectedIds.length > 0 && selectedIds.includes(l.id)) return false;
-      return true;
-    });
-
-    const result: FreeDrawingLine[] = [];
-
-    if (direction === 'vertical') {
-      const availableW = W - 2 * pFrame;
-      if (availableW <= pSize) return [];
-
-      let pitch = 140; // Pitch center-to-center
-      if (spacingType === 'luz_livre') {
-        const clearGap = Math.max(10, spacingMm);
-        pitch = clearGap + pSize;
-      } else {
-        pitch = Math.max(pSize + 5, spacingMm);
-      }
-
-      const numBars = Math.max(1, Math.floor((availableW - (pitch - pSize)) / pitch));
-      const totalSpan = (numBars - 1) * pitch;
-
-      let startX = minX + pFrame + (pitch - pSize / 2);
-      if (distribution === 'center') {
-        startX = minX + pFrame + (availableW - totalSpan) / 2;
-      } else if (distribution === 'end') {
-        startX = maxX - pFrame - totalSpan - (availableW - totalSpan) / 2;
-      }
-
-      const xPositions: number[] = [];
-      for (let i = 0; i < numBars; i++) {
-        const posX = Math.round(startX + i * pitch);
-        if (posX > minX + pFrame && posX < maxX - pFrame) {
-          xPositions.push(posX);
-        }
-      }
-
-      xPositions.forEach(posX => {
-        const rawLine = {
-          x1: posX,
-          y1: minY + pFrame,
-          x2: posX,
-          y2: maxY - pFrame,
-          profile: profileName,
-          angleDeg: 90
-        };
-
-        if (mode === 'interromper') {
-          const segs = splitLineByObstacles(rawLine, obstacles, 'autofill_v');
-          result.push(...segs);
-        } else {
-          const len = Math.round(maxY - minY - 2 * pFrame);
-          result.push({
-            id: `autofill_v_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-            x1: posX,
-            y1: minY + pFrame,
-            x2: posX,
-            y2: maxY - pFrame,
-            lengthMm: len,
-            angleDeg: 90,
-            profile: profileName,
-            color: '#10b981'
-          });
-        }
-      });
-
-    } else if (direction === 'horizontal') {
-      const availableH = H - 2 * pFrame;
-      if (availableH <= pSize) return [];
-
-      let pitch = 140;
-      if (spacingType === 'luz_livre') {
-        const clearGap = Math.max(10, spacingMm);
-        pitch = clearGap + pSize;
-      } else {
-        pitch = Math.max(pSize + 5, spacingMm);
-      }
-
-      const numBars = Math.max(1, Math.floor((availableH - (pitch - pSize)) / pitch));
-      const totalSpan = (numBars - 1) * pitch;
-
-      let startY = minY + pFrame + (pitch - pSize / 2);
-      if (distribution === 'center') {
-        startY = minY + pFrame + (availableH - totalSpan) / 2;
-      } else if (distribution === 'end') {
-        startY = maxY - pFrame - totalSpan - (availableH - totalSpan) / 2;
-      }
-
-      const yPositions: number[] = [];
-      for (let i = 0; i < numBars; i++) {
-        const posY = Math.round(startY + i * pitch);
-        if (posY > minY + pFrame && posY < maxY - pFrame) {
-          yPositions.push(posY);
-        }
-      }
-
-      yPositions.forEach(posY => {
-        const rawLine = {
-          x1: minX + pFrame,
-          y1: posY,
-          x2: maxX - pFrame,
-          y2: posY,
-          profile: profileName,
-          angleDeg: 0
-        };
-
-        if (mode === 'interromper') {
-          const segs = splitLineByObstacles(rawLine, obstacles, 'autofill_h');
-          result.push(...segs);
-        } else {
-          const len = Math.round(maxX - minX - 2 * pFrame);
-          result.push({
-            id: `autofill_h_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-            x1: minX + pFrame,
-            y1: posY,
-            x2: maxX - pFrame,
-            y2: posY,
-            lengthMm: len,
-            angleDeg: 0,
-            profile: profileName,
-            color: '#10b981'
-          });
-        }
-      });
-
-    } else {
-      // Diagonals (diagonal_asc, diagonal_desc, cross_x)
-      const isAsc = direction === 'diagonal_asc' || direction === 'cross_x';
-      const isDesc = direction === 'diagonal_desc' || direction === 'cross_x';
-
-      const generateDiagonalSeries = (asc: boolean) => {
-        let pitch = 140;
-        if (spacingType === 'luz_livre') {
-          pitch = Math.max(10, spacingMm) + pSize;
-        } else {
-          pitch = Math.max(pSize + 5, spacingMm);
-        }
-        const step = pitch * Math.SQRT2;
-        const count = Math.max(1, Math.floor((W + H) / step));
-
-        for (let i = 1; i <= count; i++) {
-          const offset = i * step;
-          let x1 = minX + pFrame;
-          let y1 = asc ? (minY + pFrame + offset) : (maxY - pFrame - offset);
-          let x2 = minX + pFrame + offset;
-          let y2 = asc ? (minY + pFrame) : (maxY - pFrame);
-
-          if (x1 > maxX - pFrame || y2 > maxY - pFrame || y2 < minY + pFrame) continue;
-
-          const cx1 = Math.min(Math.max(x1, minX + pFrame), maxX - pFrame);
-          const cy1 = Math.min(Math.max(y1, minY + pFrame), maxY - pFrame);
-          const cx2 = Math.min(Math.max(x2, minX + pFrame), maxX - pFrame);
-          const cy2 = Math.min(Math.max(y2, minY + pFrame), maxY - pFrame);
-
-          const len = Math.round(Math.hypot(cx2 - cx1, cy2 - cy1));
-          if (len >= 30) {
-            const angle = Math.round(Math.atan2(cy2 - cy1, cx2 - cx1) * (180 / Math.PI));
-            const rawDiag = {
-              x1: Math.round(cx1),
-              y1: Math.round(cy1),
-              x2: Math.round(cx2),
-              y2: Math.round(cy2),
-              profile: profileName,
-              angleDeg: angle
-            };
-
-            if (mode === 'interromper') {
-              const segs = splitLineByObstacles(rawDiag, obstacles, 'autofill_d');
-              result.push(...segs);
-            } else {
-              result.push({
-                id: `autofill_d_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                ...rawDiag,
-                lengthMm: len,
-                color: '#10b981'
-              });
-            }
-          }
-        }
-      };
-
-      if (isAsc) generateDiagonalSeries(true);
-      if (isDesc) generateDiagonalSeries(false);
-    }
-
-    return result;
-  }, [getProfileThickness, splitLineByObstacles]);
-
   const autoFillPreviewLines = useMemo(() => {
     if (!isAutoFillModalOpen) return [];
     const spacingNum = parseFloat(autoFillSpacing) || 120;
@@ -1765,8 +1338,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     autoFillSpacing,
     autoFillDistribution,
     autoFillSpacingType,
-    fabricationMode,
-    calculateAutoFillLines
+    fabricationMode
   ]);
 
   const handleApplyAutoFill = () => {
