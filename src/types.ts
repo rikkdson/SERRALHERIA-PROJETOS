@@ -149,6 +149,20 @@ export type ProfileCategory =
 
 export type MaterialUnit = 'barra' | 'm' | 'kg' | 'm2' | 'chapa';
 
+export interface CompatibleProcesses {
+  weldingMig?: boolean;
+  weldingTig?: boolean;
+  weldingStick?: boolean;     // Eletrodo Revestido
+  bolting?: boolean;          // Parafusamento
+  riveting?: boolean;         // Rebitagem
+  plasmaCutting?: boolean;
+  laserCutting?: boolean;
+  oxyfuelCutting?: boolean;   // Corte Oxicorte
+  sawing?: boolean;           // Serra
+  shearing?: boolean;         // Guilhotina
+  bending?: boolean;          // Dobradeira
+}
+
 export interface MaterialProfile {
   id: string;
   name: string;             // Nome ex: "Metalon 15x15", "Tubo Redondo 2\""
@@ -168,6 +182,29 @@ export interface MaterialProfile {
   isArchived?: boolean;     // Perfil arquivado
   createdAt?: string;
   updatedAt?: string;
+
+  // FASE 1: Propriedades Técnicas (ET-020.2)
+  mechanicalStrength?: string;      // Ex: "ASTM A36 (Tensão Escoamento 250 MPa)", "SAE 1010/1020"
+  densityGcm3?: number;             // Densidade em g/cm³ (ex: 7.85)
+  specificWeightKgm3?: number;      // Peso específico em kg/m³ (ex: 7850)
+  commercialThicknesses?: string[]; // Espessuras comerciais disponíveis (ex: ["1.2 mm (#18)", "1.5 mm (#16)"])
+  availableFinishes?: string[];     // Acabamentos (ex: ["Bruto / Preto", "Galvanizado", "Pintado / Primer"])
+  isGalvanized?: boolean;           // Galvanizado (Sim/Não)
+  isStainless?: boolean;            // Inox (Sim/Não)
+  isAluminum?: boolean;             // Alumínio (Sim/Não)
+  minBendRadiusMm?: number;         // Raio mínimo de dobra em mm
+  technicalNotes?: string;          // Observações técnicas adicionais
+
+  // FASE 2: Processos Compatíveis (ET-020.2)
+  compatibleProcesses?: CompatibleProcesses;
+
+  // FASE 3: Informações Comerciais (ET-020.2)
+  internalCode?: string;             // Código interno de estoque ex: "MAT-MET-3030-15"
+  mainSupplier?: string;             // Fornecedor principal
+  alternativeSuppliers?: string[];   // Fornecedores alternativos
+  leadTimeDays?: number;             // Prazo médio de entrega (dias)
+  purchaseUnit?: MaterialUnit | string; // Unidade de compra
+  commercialNotes?: string;          // Observações comerciais
 }
 
 export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
