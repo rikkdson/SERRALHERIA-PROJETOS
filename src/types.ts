@@ -3,7 +3,46 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { DiagonalConfig, DivisionConfig, LeafConfig, ProjectCalculations, CutListItem } from './models';
+
 export type MeasurementUnit = 'mm' | 'cm' | 'm';
+
+export type ParametricConstraintType =
+  | 'centralizado'
+  | 'alinhado_esquerda'
+  | 'alinhado_direita'
+  | 'alinhado_topo'
+  | 'alinhado_base'
+  | 'equidistante'
+  | 'paralelo'
+  | 'perpendicular'
+  | 'coincidente'
+  | 'vinculado_quadro'
+  | 'vinculado_folha'
+  | 'comprimento_fixo'
+  | 'angulo_fixo';
+
+export interface ParametricConstraint {
+  id?: string;
+  type: ParametricConstraintType;
+  targetId?: string;
+  value?: number;
+  description?: string;
+}
+
+export type StructuralFunction =
+  | 'quadro_principal'
+  | 'quadro_folha'
+  | 'travessa_horizontal'
+  | 'montante_vertical'
+  | 'diagonal'
+  | 'reforco'
+  | 'porta_social'
+  | 'preenchimento'
+  | 'batente'
+  | 'coluna_suporte'
+  | 'viga_superior'
+  | 'perfil_livre';
 
 export type PieceType = 
   | 'quadro_interno'
@@ -32,6 +71,15 @@ export interface PieceConfig {
   orientation: 'horizontal' | 'vertical';
   angle: number;        // in degrees
   observations: string;
+
+  // Parametric & Structural Relationships:
+  parentId?: string;
+  structuralFunction?: StructuralFunction;
+  funcaoEstrutural?: StructuralFunction;
+  dependencies?: string[];
+  dependencias?: string[];
+  constraints?: ParametricConstraint[];
+  restricoes?: ParametricConstraint[];
 
   // Specific for Diagonal:
   diagonalStart?: string; 
@@ -100,14 +148,14 @@ export interface MetalProject {
   createdAt: string;
   updatedAt: string;
   frame?: FrameConfig;
-  pieces?: PieceConfig[]; // Updated from any[]
+  pieces?: PieceConfig[];
   
   // Prepared fields for future expansions:
-  diagonals?: any[];
-  divisions?: any[];
-  leaves?: any[]; // "folhas"
-  calculations?: Record<string, any>;
-  cutList?: any[];
+  diagonals?: DiagonalConfig[];
+  divisions?: DivisionConfig[];
+  leaves?: LeafConfig[]; // "folhas"
+  calculations?: ProjectCalculations;
+  cutList?: CutListItem[];
   budgetConfig?: BudgetConfig;
   freeDrawing?: FreeDrawingData;
 }
@@ -892,10 +940,25 @@ export interface FreeDrawingLine {
   profile?: string; // metallic profile name assigned from materials store
   color?: string;
   isCustomAngle?: boolean;
+  panelId?: string; // ET-021.4: ID do painel vinculado se for barra de preenchimento
+  isPanelFillBar?: boolean; // ET-021.4: flag identificadora de barra de preenchimento
+  type?: string; // piece type (travessa, montante, diagonal, reforco, etc.)
+  name?: string; // custom piece name
+  observations?: string; // custom piece observations
+
+  // Parametric & Structural Relationships:
+  parentId?: string;
+  structuralFunction?: StructuralFunction;
+  funcaoEstrutural?: StructuralFunction;
+  dependencies?: string[];
+  dependencias?: string[];
+  constraints?: ParametricConstraint[];
+  restricoes?: ParametricConstraint[];
 }
 
 export interface FreeDrawingData {
   lines: FreeDrawingLine[];
+  panels?: StructuralPanel[];
   viewport: {
     zoom: number;
     panX: number;
@@ -906,6 +969,96 @@ export interface FreeDrawingData {
   snapToEndpoints?: boolean;
   fabricationMode?: 'interromper' | 'continuo';
   updatedAt?: string;
+}
+
+// ==========================================
+// ET-021.3: SISTEMA INTELIGENTE DE PAINÉIS (INFRAESTRUTURA) TYPES
+// ==========================================
+
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+export interface PanelBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export interface StructuralPanel {
+  id: string;                      // ID único do painel (ex: panel_1)
+  indexNumber: number;             // Número sequencial (1, 2, 3...)
+  name: string;                    // Nome do painel (ex: "Painel P1")
+  contourBarIds: string[];         // IDs das barras de contorno que fecham o perímetro
+  vertices: Point2D[];             // Vértices ordenados do polígono do painel
+  widthMm: number;                 // Largura do painel em mm
+  heightMm: number;                // Altura do painel em mm
+  areaMm2: number;                 // Área da superfície em mm²
+  areaM2: number;                  // Área da superfície em m²
+  perimeterMm: number;             // Perímetro em mm
+  centroid: Point2D;               // Centro geométrico (x, y)
+  bounds: PanelBounds;             // Limites da caixa envolvente
+  isActive: boolean;              // Painel ativo/inativo
+  fillConfig?: PanelFillConfig;    // ET-021.4: Configuração de preenchimento ativo do painel
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PanelSummary {
+  totalCount: number;
+  totalAreaM2: number;
+  minAreaM2: number;
+  maxAreaM2: number;
+  activeCount: number;
+}
+
+export interface PanelTestResult {
+  testId: string;
+  name: string;
+  passed: boolean;
+  message: string;
+  details?: string;
+}
+
+// ==========================================
+// ET-021.4: ASSISTENTE INTELIGENTE DE PREENCHIMENTO DE PAINÉIS TYPES
+// ==========================================
+
+export type PanelFillPattern = 'diagonal' | 'vertical' | 'horizontal' | 'cross';
+
+export interface PanelGuideBar {
+  id: string;
+  p1: Point2D;
+  p2: Point2D;
+  lengthMm: number;
+  angleDeg: number;
+  directionType: 'diagonal_up' | 'diagonal_down' | 'vertical' | 'horizontal';
+}
+
+export interface PanelFillConfig {
+  panelId: string;
+  pattern: PanelFillPattern;
+  profileName: string;
+  spacingMm: number;               // Espaço-luz (pitch/distância entre barras)
+  angleDeg: number;                // Inclinação calculada da barra guia
+  isInverted: boolean;             // Inverter sentido do preenchimento
+  alignWithNeighbor: boolean;      // Alinhar inclinação/fase com painel vizinho
+  guideBar?: PanelGuideBar;        // Barra guia temporária de referência
+  filledBarIds?: string[];         // IDs das barras geradas no desenho
+  updatedAt?: string;
+}
+
+export interface PanelFillPreviewBar {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  lengthMm: number;
+  angleDeg: number;
+  profileName: string;
 }
 
 // ==========================================

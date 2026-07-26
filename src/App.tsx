@@ -69,6 +69,7 @@ import { MobileBottomNav } from './components/MobileBottomNav';
 import { QuickActionFabModal } from './components/QuickActionFabModal';
 import { NewProjectWizardModal, StructureTypeId } from './components/NewProjectWizardModal';
 import { getMaterialProfiles, MATERIALS_UPDATED_EVENT } from './utils/materialsStore';
+import { core, projectManager, objectManager, eventBus } from './core';
 
 // Initial pre-loaded projects for a premium, zero-friction first-use experience
 const DEFAULT_PROJECTS: MetalProject[] = [
@@ -477,27 +478,38 @@ export default function App() {
     }
   };
 
-  // Load projects from localStorage or default presets
+  // Initialize Core and sync project list via ProjectManager & EventBus
   useEffect(() => {
-    const stored = localStorage.getItem('serralheria_projetos');
-    if (stored) {
-      try {
-        setProjects(JSON.parse(stored));
-      } catch (e) {
-        console.error("Error parsing stored projects, falling back to defaults", e);
-        setProjects(DEFAULT_PROJECTS);
-        localStorage.setItem('serralheria_projetos', JSON.stringify(DEFAULT_PROJECTS));
+    core.init().then(() => {
+      setProjects(projectManager.getProjects());
+    });
+
+    const unsubscribeProjectsLoaded = eventBus.on('projects:loaded', (loaded) => {
+      setProjects(loaded);
+    });
+
+    const unsubscribeProjectUpdated = eventBus.on('project:updated', (updated) => {
+      setProjects(projectManager.getProjects());
+      if (currentProject?.id === updated.id) {
+        setCurrentProject(updated);
       }
-    } else {
-      setProjects(DEFAULT_PROJECTS);
-      localStorage.setItem('serralheria_projetos', JSON.stringify(DEFAULT_PROJECTS));
-    }
-  }, []);
+    });
+
+    const unsubscribeProjectOpened = eventBus.on('project:opened', (proj) => {
+      setCurrentProject(proj);
+    });
+
+    return () => {
+      unsubscribeProjectsLoaded();
+      unsubscribeProjectUpdated();
+      unsubscribeProjectOpened();
+    };
+  }, [currentProject?.id]);
 
   // Save projects helper
   const saveProjectsToLocalStorage = (updatedList: MetalProject[]) => {
     setProjects(updatedList);
-    localStorage.setItem('serralheria_projetos', JSON.stringify(updatedList));
+    core.storageProvider.saveProjects(updatedList);
   };
 
   // Format date helper in Portuguese
@@ -513,29 +525,16 @@ export default function App() {
   };
 
   // Handler: Create new project
-  const handleCreateProject = (e: React.FormEvent) => {
+  const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
 
-    const newProject: MetalProject = {
-      id: `proj-${Date.now()}`,
+    const newProject = await projectManager.createProject({
       name: newProjectName.trim(),
       status: 'planejamento',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      // Prepared empty fields for future updates:
-      pieces: [],
-      diagonals: [],
-      divisions: [],
-      leaves: [],
-      calculations: {},
-      cutList: []
-    };
+    });
 
-    const updatedProjects = [newProject, ...projects];
-    saveProjectsToLocalStorage(updatedProjects);
-    
-    // Reset state & navigate directly to the project detail view
+    setProjects(projectManager.getProjects());
     setNewProjectName('');
     setIsNewProjectModalOpen(false);
     setCurrentProject(newProject);
@@ -543,17 +542,19 @@ export default function App() {
   };
 
   // Handler: Save active project changes (status, frames, details)
-  const handleSaveActiveProject = (updatedProj: MetalProject) => {
-    updatedProj.updatedAt = new Date().toISOString();
-    
-    // Ensure if project doesn't exist in array yet, add it
-    const exists = projects.some(p => p.id === updatedProj.id);
-    const updatedProjects = exists
-      ? projects.map(p => p.id === updatedProj.id ? updatedProj : p)
-      : [updatedProj, ...projects];
+  const handleSaveActiveProject = async (updatedProj: MetalProject) => {
+    const saved = await projectManager.saveProject(updatedProj);
+    setProjects(projectManager.getProjects());
+    setCurrentProject(saved);
+  };
 
-    saveProjectsToLocalStorage(updatedProjects);
-    setCurrentProject(updatedProj);
+  // Handler: Duplicate project
+  const handleDuplicateProject = async (proj: MetalProject, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const duplicated = await projectManager.duplicateProject(proj.id);
+    if (duplicated) {
+      setProjects(projectManager.getProjects());
+    }
   };
 
   // Handler: Wizard project creation (ET-009B.2)
@@ -584,11 +585,11 @@ export default function App() {
   };
 
   // Handler: Confirm deletion of project
-  const confirmDeleteProject = () => {
+  const confirmDeleteProject = async () => {
     if (!projectToDelete) return;
     const targetId = projectToDelete.id;
-    const filtered = projects.filter(p => p.id !== targetId);
-    saveProjectsToLocalStorage(filtered);
+    await projectManager.deleteProject(targetId);
+    setProjects(projectManager.getProjects());
     
     if (currentProject?.id === targetId) {
       setCurrentProject(null);
@@ -1079,14 +1080,25 @@ export default function App() {
                           <ChevronLeft className="w-4 h-4 rotate-180" />
                         </span>
 
-                        <button
-                          id={`btn-excluir-projeto-${project.id}`}
-                          onClick={(e) => handleDeleteProject(project, e)}
-                          className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition-colors duration-150 cursor-pointer"
-                          title="Excluir projeto"
-                        >
-                          <Trash2 className="w-4.5 h-4.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            id={`btn-duplicar-projeto-${project.id}`}
+                            onClick={(e) => handleDuplicateProject(project, e)}
+                            className="text-slate-400 hover:text-amber-600 p-1.5 rounded-lg hover:bg-amber-50 transition-colors duration-150 cursor-pointer"
+                            title="Duplicar projeto"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            id={`btn-excluir-projeto-${project.id}`}
+                            onClick={(e) => handleDeleteProject(project, e)}
+                            className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition-colors duration-150 cursor-pointer"
+                            title="Excluir projeto"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}

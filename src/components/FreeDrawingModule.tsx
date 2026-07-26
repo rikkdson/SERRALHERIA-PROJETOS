@@ -41,11 +41,39 @@ import {
   Square,
   AlertTriangle
 } from 'lucide-react';
-import { MetalProject, FreeDrawingLine, FreeDrawingData, MaterialProfile, PieceConfig } from '../types';
+import { MetalProject, FreeDrawingLine, FreeDrawingData, MaterialProfile, PieceConfig, PieceType } from '../types';
+import { objectManager } from '../core/ObjectManager';
+import { eventBus } from '../core/EventBus';
 import { getMaterialProfiles } from '../utils/materialsStore';
 import { getStructureBounds, getProfileThickness, computeGuideLine } from '../engines/geometryEngine';
 import { splitLineByObstacles, calculateAutoFillLines } from '../engines/intersectionEngine';
 import { processFabricationModel, runFabricationEngineValidationTests } from '../engines/fabricationEngine';
+import { PanelManager, PANELS_UPDATED_EVENT, runPanelEngineValidationTests } from '../engines/panelManager';
+import { PanelFillAssistantModal } from './PanelFillAssistantModal';
+import {
+  detectGuideBar,
+  generatePanelFillPreview,
+  applyPanelFill,
+  removePanelFill,
+  runPanelFillEngineValidationTests,
+} from '../engines/panelFillEngine';
+import { PanelFillConfig, PanelFillPreviewBar, PanelGuideBar } from '../types';
+import { ParametricRelationsPanel } from './ParametricRelationsPanel';
+import { solveParametricStructure } from '../engines/parametricEngine';
+
+function isPointInPolygon(pt: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
+  if (!poly || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+
+    const intersect = ((yi > pt.y) !== (yj > pt.y))
+        && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
 
 interface FreeDrawingModuleProps {
   project: MetalProject | null;
@@ -62,7 +90,8 @@ export type DrawingTool =
   | 'square' 
   | 'polyline' 
   | 'pan' 
-  | 'eraser';
+  | 'eraser'
+  | 'panel';
 
 export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   project,
@@ -241,9 +270,40 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   const [postAddPromptModal, setPostAddPromptModal] = useState<boolean>(false);
 
   // Inspector Edit Inputs for Selected Line
+  const [editNameInput, setEditNameInput] = useState<string>('');
+  const [editTypeInput, setEditTypeInput] = useState<string>('travessa');
   const [editLengthInput, setEditLengthInput] = useState<string>('');
   const [editAngleInput, setEditAngleInput] = useState<string>('');
   const [editProfileInput, setEditProfileInput] = useState<string>('');
+  const [editPosXInput, setEditPosXInput] = useState<string>('');
+  const [editPosYInput, setEditPosYInput] = useState<string>('');
+  const [editObservationsInput, setEditObservationsInput] = useState<string>('');
+
+  // ET-021.3: Sistema Inteligente de Painéis States
+  const [isPanelTestModalOpen, setIsPanelTestModalOpen] = useState<boolean>(false);
+  const [activeHighlightedPanelId, setActiveHighlightedPanelId] = useState<string | null>(null);
+  const [activeSelectedPanelId, setActiveSelectedPanelId] = useState<string | null>(null);
+  const [, setPanelsTick] = useState<number>(0);
+
+  // ET-021.4: Assistente Inteligente de Preenchimento de Painéis States
+  const [isPanelFillAssistantOpen, setIsPanelFillAssistantOpen] = useState<boolean>(false);
+  const [currentGuideBar, setCurrentGuideBar] = useState<PanelGuideBar | null>(null);
+  const [previewFillBars, setPreviewFillBars] = useState<PanelFillPreviewBar[]>([]);
+  const [guideBarStart, setGuideBarStart] = useState<{ x: number; y: number } | null>(null);
+  const [isDrawingGuideBar, setIsDrawingGuideBar] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handlePanelsUpdated = () => {
+      setActiveHighlightedPanelId(PanelManager.getHighlightedPanelId());
+      setActiveSelectedPanelId(PanelManager.getSelectedPanelId());
+      setPanelsTick((t) => t + 1);
+    };
+
+    window.addEventListener(PANELS_UPDATED_EVENT, handlePanelsUpdated);
+    return () => {
+      window.removeEventListener(PANELS_UPDATED_EVENT, handlePanelsUpdated);
+    };
+  }, []);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const lastDrawingHash = useRef<string>('');
@@ -361,6 +421,15 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
       touchStateRef.current.longPressTimer = null;
     }
 
+    if (activeTool === 'panel' || isPanelFillAssistantOpen || activeSelectedPanelId || isDrawingGuideBar) {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const coords = getPointerMmCoordinates(touch.clientX, touch.clientY);
+        handleCanvasPointerDown(coords, touch.clientX, touch.clientY);
+      }
+      return;
+    }
+
     if (activeTool === 'area_select') {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
@@ -426,6 +495,15 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   };
 
   const handleTouchMove = (e: React.TouchEvent<SVGSVGElement>) => {
+    if (activeTool === 'panel' || isPanelFillAssistantOpen || activeSelectedPanelId || isDrawingGuideBar) {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const coords = getPointerMmCoordinates(touch.clientX, touch.clientY);
+        handleCanvasPointerMove(coords, touch.clientX, touch.clientY);
+      }
+      return;
+    }
+
     if (activeTool === 'area_select') {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
@@ -491,6 +569,11 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     if (touchStateRef.current.longPressTimer) {
       clearTimeout(touchStateRef.current.longPressTimer);
       touchStateRef.current.longPressTimer = null;
+    }
+
+    if (activeTool === 'panel' || isPanelFillAssistantOpen || activeSelectedPanelId || isDrawingGuideBar) {
+      handleCanvasMouseUp();
+      return;
     }
 
     if (activeTool === 'area_select') {
@@ -607,6 +690,7 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     const processedLines = processFabricationModel(newLines, activeMode);
 
     setLines(processedLines);
+    const currentPanels = PanelManager.updatePanels(processedLines);
 
     // Push to undo history
     const newHistory = history.slice(0, historyIndex + 1);
@@ -614,35 +698,47 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
 
-    // Save to project / localStorage
+    // Save to project / localStorage & ObjectManager
     const drawData: FreeDrawingData = {
       lines: processedLines,
+      panels: currentPanels,
       viewport: { zoom, panX: pan.x, panY: pan.y },
       fabricationMode: activeMode,
       updatedAt: new Date().toISOString()
     };
 
-    if (project && onUpdateProject) {
-      const mappedPieces: PieceConfig[] = processedLines.map((line, idx) => {
-        const len = line.lengthMm || Math.round(Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
-        const isHoriz = Math.abs(line.y1 - line.y2) < 5;
-        return {
-          id: line.id || `pc-${idx}-${Date.now()}`,
-          name: `Peça ${idx + 1} (${line.profile || 'Metalon'})`,
-          type: 'perfil_personalizado',
-          profile: line.profile || 'Metalon 20x20',
-          length: len,
-          width: 20,
-          height: 20,
-          thickness: 1.2,
-          posX: Math.min(line.x1, line.x2),
-          posY: Math.min(line.y1, line.y2),
-          orientation: isHoriz ? 'horizontal' : 'vertical',
-          angle: line.angleDeg || 0,
-          observations: ''
-        };
-      });
+    const mappedPieces: PieceConfig[] = processedLines.map((line, idx) => {
+      const len = line.lengthMm || Math.round(Math.hypot(line.x2 - line.x1, line.y2 - line.y1));
+      const isHoriz = Math.abs(line.y1 - line.y2) < 5;
+      const pieceType = (line.type as PieceType) || (isHoriz ? 'travessa' : 'coluna');
+      const pieceName = line.name || `Peça ${idx + 1} (${line.profile || 'Metalon'})`;
 
+      return {
+        id: line.id || `pc-${idx}-${Date.now()}`,
+        name: pieceName,
+        type: pieceType,
+        profile: line.profile || defaultProfile || 'Metalon 30x30',
+        length: len,
+        width: 20,
+        height: 20,
+        thickness: 1.2,
+        posX: Math.min(line.x1, line.x2),
+        posY: Math.min(line.y1, line.y2),
+        orientation: isHoriz ? 'horizontal' : 'vertical',
+        angle: line.angleDeg || 0,
+        observations: line.observations || ''
+      };
+    });
+
+    const targetProjectId = project?.id || `proj-${Date.now()}`;
+
+    // Sync with global ObjectManager & EventBus
+    objectManager.updateFreeDrawing(drawData, targetProjectId);
+    objectManager.setPieces(mappedPieces, targetProjectId);
+    eventBus.emit('objects:updated', { projectId: targetProjectId, pieces: mappedPieces });
+    eventBus.emit('freedrawing:updated', { projectId: targetProjectId, freeDrawing: drawData });
+
+    if (project && onUpdateProject) {
       onUpdateProject({
         ...project,
         pieces: mappedPieces,
@@ -1165,9 +1261,14 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   // Keep inspector inputs synchronized with selected line
   useEffect(() => {
     if (selectedLine) {
+      setEditNameInput(selectedLine.name || `Peça (${selectedLine.profile || 'Metalon'})`);
+      setEditTypeInput(selectedLine.type || (Math.abs(selectedLine.y1 - selectedLine.y2) < 5 ? 'travessa' : 'divisao_vertical'));
+      setEditProfileInput(selectedLine.profile || defaultProfile);
       setEditLengthInput(selectedLine.lengthMm.toString());
       setEditAngleInput(selectedLine.angleDeg.toString());
-      setEditProfileInput(selectedLine.profile || defaultProfile);
+      setEditPosXInput(Math.min(selectedLine.x1, selectedLine.x2).toString());
+      setEditPosYInput(Math.min(selectedLine.y1, selectedLine.y2).toString());
+      setEditObservationsInput(selectedLine.observations || '');
     }
   }, [selectedLine, defaultProfile]);
 
@@ -1391,21 +1492,47 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
   const handleApplyLineEdits = () => {
     if (!selectedLine) return;
 
-    const newLen = parseFloat(editLengthInput) || selectedLine.lengthMm;
+    const newName = editNameInput.trim() || selectedLine.name || 'Peça';
+    const newType = editTypeInput || selectedLine.type || 'travessa';
+    const newProfile = editProfileInput || selectedLine.profile || defaultProfile;
+    const newLen = Math.max(10, parseFloat(editLengthInput) || selectedLine.lengthMm);
     const newAngle = parseFloat(editAngleInput) ?? selectedLine.angleDeg;
-    const newProfile = editProfileInput || selectedLine.profile;
+    const targetX = parseFloat(editPosXInput);
+    const targetY = parseFloat(editPosYInput);
+    const newObs = editObservationsInput;
+
+    const currentMinX = Math.min(selectedLine.x1, selectedLine.x2);
+    const currentMinY = Math.min(selectedLine.y1, selectedLine.y2);
+
+    let shiftX = 0;
+    let shiftY = 0;
+
+    if (!isNaN(targetX)) {
+      shiftX = targetX - currentMinX;
+    }
+    if (!isNaN(targetY)) {
+      shiftY = targetY - currentMinY;
+    }
+
+    const newX1 = selectedLine.x1 + shiftX;
+    const newY1 = selectedLine.y1 + shiftY;
 
     const angleRad = (newAngle * Math.PI) / 180;
-    const newX2 = Math.round(selectedLine.x1 + newLen * Math.cos(angleRad));
-    const newY2 = Math.round(selectedLine.y1 + newLen * Math.sin(angleRad));
+    const newX2 = Math.round(newX1 + newLen * Math.cos(angleRad));
+    const newY2 = Math.round(newY1 + newLen * Math.sin(angleRad));
 
     const updatedLines = lines.map((l) => {
       if (l.id === selectedLine.id) {
         return {
           ...l,
+          name: newName,
+          type: newType,
+          profile: newProfile,
           lengthMm: Math.round(newLen),
           angleDeg: Math.round(newAngle),
-          profile: newProfile,
+          observations: newObs,
+          x1: Math.round(newX1),
+          y1: Math.round(newY1),
           x2: newX2,
           y2: newY2,
         };
@@ -1414,6 +1541,161 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
     });
 
     commitLinesState(updatedLines);
+    showToast(`✅ Peça "${newName}" atualizada!`);
+  };
+
+  // Duplicate Selected Piece
+  const handleDuplicateSelectedPiece = () => {
+    if (!selectedLine) return;
+    const now = Date.now();
+    const newPiece: FreeDrawingLine = {
+      ...selectedLine,
+      id: `line-dup-${now}-${Math.random().toString(36).substring(2, 6)}`,
+      name: `${selectedLine.name || 'Peça'} (Cópia)`,
+      x1: selectedLine.x1 + 100,
+      y1: selectedLine.y1 + 100,
+      x2: selectedLine.x2 + 100,
+      y2: selectedLine.y2 + 100,
+    };
+    const updated = [...lines, newPiece];
+    commitLinesState(updated);
+    selectSingleLine(newPiece.id);
+    showToast("📋 Peça duplicada com sucesso!");
+  };
+
+  // Mirror Selected Piece
+  const handleMirrorSelectedPiece = (direction: 'horizontal' | 'vertical') => {
+    if (!selectedLine) return;
+    const bounds = getStructureBounds(lines);
+    const midX = (bounds.minX + bounds.maxX) / 2 || 500;
+    const midY = (bounds.minY + bounds.maxY) / 2 || 500;
+
+    let newX1 = selectedLine.x1;
+    let newY1 = selectedLine.y1;
+    let newX2 = selectedLine.x2;
+    let newY2 = selectedLine.y2;
+    let newAngle = selectedLine.angleDeg;
+
+    if (direction === 'horizontal') {
+      newX1 = Math.round(2 * midX - selectedLine.x1);
+      newX2 = Math.round(2 * midX - selectedLine.x2);
+      newAngle = Math.round((180 - selectedLine.angleDeg + 360) % 360);
+    } else {
+      newY1 = Math.round(2 * midY - selectedLine.y1);
+      newY2 = Math.round(2 * midY - selectedLine.y2);
+      newAngle = Math.round((360 - selectedLine.angleDeg) % 360);
+    }
+
+    const updatedLines = lines.map((l) => {
+      if (l.id === selectedLine.id) {
+        return {
+          ...l,
+          x1: newX1,
+          y1: newY1,
+          x2: newX2,
+          y2: newY2,
+          angleDeg: newAngle,
+        };
+      }
+      return l;
+    });
+
+    commitLinesState(updatedLines);
+    showToast(`🪞 Peça espelhada ${direction === 'horizontal' ? 'horizontalmente' : 'verticalmente'}!`);
+  };
+
+  // Insert Structural Piece (Travessa, Montante, Diagonal, Reforço)
+  const handleInsertStructurePiece = (type: 'travessa' | 'montante' | 'diagonal' | 'reforco') => {
+    const bounds = getStructureBounds(lines);
+    const now = Date.now();
+    const prof = defaultProfile || 'Metalon 30x30';
+    let newPiece: FreeDrawingLine;
+
+    const w = bounds.width > 0 ? bounds.width : 1200;
+    const h = bounds.height > 0 ? bounds.height : 2000;
+    const x0 = bounds.minX !== Infinity ? bounds.minX : 0;
+    const y0 = bounds.minY !== Infinity ? bounds.minY : 0;
+
+    if (type === 'travessa') {
+      const targetY = Math.round(y0 + h / 2);
+      newPiece = {
+        id: `travessa-${now}`,
+        name: 'Travessa Horizontal',
+        type: 'travessa',
+        profile: prof,
+        x1: x0,
+        y1: targetY,
+        x2: x0 + w,
+        y2: targetY,
+        lengthMm: w,
+        angleDeg: 0,
+        observations: 'Inserida pelo assistente'
+      };
+    } else if (type === 'montante') {
+      const targetX = Math.round(x0 + w / 2);
+      newPiece = {
+        id: `montante-${now}`,
+        name: 'Montante Vertical',
+        type: 'divisao_vertical',
+        profile: prof,
+        x1: targetX,
+        y1: y0,
+        x2: targetX,
+        y2: y0 + h,
+        lengthMm: h,
+        angleDeg: 90,
+        observations: 'Inserida pelo assistente'
+      };
+    } else if (type === 'diagonal') {
+      newPiece = {
+        id: `diagonal-${now}`,
+        name: 'Diagonal Estrutural',
+        type: 'diagonal',
+        profile: prof,
+        x1: x0,
+        y1: y0,
+        x2: x0 + w,
+        y2: x0 + h,
+        lengthMm: Math.round(Math.hypot(w, h)),
+        angleDeg: Math.round((Math.atan2(h, w) * 180) / Math.PI),
+        observations: 'Inserida pelo assistente'
+      };
+    } else {
+      // Reforço
+      const size = 300;
+      newPiece = {
+        id: `reforco-${now}`,
+        name: 'Reforço Mão de Força',
+        type: 'reforco',
+        profile: prof,
+        x1: x0,
+        y1: y0 + size,
+        x2: x0 + size,
+        y2: y0,
+        lengthMm: Math.round(size * Math.SQRT2),
+        angleDeg: 315,
+        observations: 'Inserida pelo assistente'
+      };
+    }
+
+    const updated = [...lines, newPiece];
+    commitLinesState(updated);
+    selectSingleLine(newPiece.id);
+    showToast(`✅ ${newPiece.name} adicionada!`);
+  };
+
+  // Parametric Structure Resize Handler
+  const handleParametricStructureResize = (targetWidth: number, targetHeight: number) => {
+    if (isNaN(targetWidth) || isNaN(targetHeight) || targetWidth < 50 || targetHeight < 50) return;
+    const updatedProj = objectManager.recalculateParametricStructure(targetWidth, targetHeight, project?.id);
+    if (updatedProj && updatedProj.freeDrawing?.lines) {
+      commitLinesState(updatedProj.freeDrawing.lines);
+      showToast(`⚡ Estrutura paramétrica recalculada (${targetWidth}x${targetHeight}mm)! Quadro, travessas, montantes e diagonais ajustados.`);
+    } else {
+      const solved = solveParametricStructure(lines, targetWidth, targetHeight, PanelManager.getPanels());
+      commitLinesState(solved.lines);
+      showToast(`⚡ Estrutura paramétrica recalculada (${targetWidth}x${targetHeight}mm)!`);
+    }
   };
 
   // Endpoint Drag Handler
@@ -1514,6 +1796,18 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
       return;
     }
 
+    if (activeTool === 'panel') {
+      const detectedPanels = PanelManager.getPanels();
+      const clicked = detectedPanels.find((p) => isPointInPolygon(coords, p.vertices));
+      if (clicked) {
+        PanelManager.selectPanel(clicked.id);
+        showToast(`Painel ${clicked.name} selecionado! (${clicked.widthMm} x ${clicked.heightMm} mm)`);
+      } else {
+        PanelManager.selectPanel(null);
+      }
+      return;
+    }
+
     if (activeTool === 'select') {
       selectGroupLines([]);
       return;
@@ -1600,6 +1894,12 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
 
     setCurrentCursor(coords);
     setSnapIndicator(snapPt);
+
+    if (activeTool === 'panel') {
+      const detectedPanels = PanelManager.getPanels();
+      const hovered = detectedPanels.find((p) => isPointInPolygon(coords, p.vertices));
+      PanelManager.highlightPanel(hovered ? hovered.id : null);
+    }
 
     if (activeTool === 'area_select') {
       if (selectionBox) {
@@ -1913,6 +2213,25 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <span>🧩 Preenchimento Auto</span>
           </button>
 
+          {/* 1C. Modo Painel (ET-021.3 - Sistema Inteligente de Painéis) */}
+          <button
+            type="button"
+            id="btn-ferramenta-modo-painel"
+            onClick={() => {
+              setActiveTool('panel');
+              PanelManager.updatePanels(lines);
+              showToast("Modo Painel ativado! Toque sobre as áreas fechadas.");
+            }}
+            className={`w-full py-3 px-4 rounded-xl font-bold text-sm transition duration-150 flex items-center gap-3 border cursor-pointer ${
+              activeTool === 'panel'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-extrabold shadow-md'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+          >
+            <Box className="w-5 h-5 text-amber-400" />
+            <span>🔲 Modo Painel (ET-021.3)</span>
+          </button>
+
           {/* 2. Selecionar Área */}
           <button
             type="button"
@@ -1976,42 +2295,156 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
             <span>🗑️ Excluir{selectedLineIds.length > 1 ? ` (${selectedLineIds.length})` : ''}</span>
           </button>
 
-          {/* INSPECTOR CARD IF LINE IS SELECTED */}
+          {/* INSERÇÃO RÁPIDA DE PEÇAS ESTRUTURAIS */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
+            <span className="text-[11px] font-bold text-amber-400 font-mono block uppercase tracking-wider">
+              🧩 Ferramentas Estruturais
+            </span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleInsertStructurePiece('travessa')}
+                className="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs rounded-lg border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                title="Inserir Travessa Horizontal"
+              >
+                <span>➖ Travessa</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInsertStructurePiece('montante')}
+                className="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs rounded-lg border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                title="Inserir Montante Vertical"
+              >
+                <span>❙ Montante</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInsertStructurePiece('diagonal')}
+                className="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs rounded-lg border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                title="Inserir Diagonal"
+              >
+                <span>╱ Diagonal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInsertStructurePiece('reforco')}
+                className="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs rounded-lg border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                title="Inserir Reforço Mão de Força"
+              >
+                <span>📐 Reforço</span>
+              </button>
+            </div>
+          </div>
+
+          {/* REDIMENSIONAMENTO PARAMÉTRICO GLOBAL */}
+          <div className="bg-slate-950/90 border border-indigo-500/40 rounded-xl p-3 space-y-2.5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <span className="text-[11px] font-bold text-indigo-400 font-mono flex items-center gap-1 uppercase tracking-wider">
+                ⚡ Motor Paramétrico
+              </span>
+              <span className="text-[9px] bg-indigo-950 text-indigo-300 border border-indigo-800 px-1.5 py-0.5 rounded font-mono">
+                {lines.length} Peças
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-slate-400 font-mono block mb-1">Largura (mm)</label>
+                <input
+                  type="number"
+                  defaultValue={getStructureBounds(lines).width}
+                  id="input-param-largura"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400 font-mono block mb-1">Altura (mm)</label>
+                <input
+                  type="number"
+                  defaultValue={getStructureBounds(lines).height}
+                  id="input-param-altura"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-indigo-400"
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const currentBounds = getStructureBounds(lines);
+                const wInput = (document.getElementById('input-param-largura') as HTMLInputElement)?.value;
+                const hInput = (document.getElementById('input-param-altura') as HTMLInputElement)?.value;
+                const newW = parseFloat(wInput || `${currentBounds.width}`);
+                const newH = parseFloat(hInput || `${currentBounds.height}`);
+                handleParametricStructureResize(newW, newH);
+              }}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg transition cursor-pointer shadow-md flex items-center justify-center gap-1.5 active:scale-[0.98]"
+            >
+              <span>⚡ Recalcular Estrutura</span>
+            </button>
+          </div>
+
+          {/* PAINEL LATERAL DE PROPRIEDADES DA PEÇA */}
           {selectedLine && (
-            <div className="mt-2 bg-slate-950 border border-amber-500/40 rounded-xl p-3 text-xs space-y-2.5">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                <span className="font-bold text-amber-400 font-mono flex items-center gap-1">
-                  <Box className="w-3.5 h-3.5" />
-                  Peça Selecionada
-                </span>
-                <button
-                  onClick={() => selectSingleLine(null)}
-                  className="text-slate-500 hover:text-white"
+            <div className="mt-2 space-y-3">
+              {/* Painel de Relações Paramétricas e Restrições da Peça Selecionada */}
+              <ParametricRelationsPanel 
+                selectedPiece={selectedLine}
+                onUpdatePiece={(updated) => {
+                  const updatedLines = lines.map(l => l.id === updated.id ? { ...l, ...updated } : l);
+                  commitLinesState(updatedLines);
+                }}
+              />
+
+              <div className="bg-slate-950 border border-amber-500/50 rounded-xl p-3 text-xs space-y-3 shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <span className="font-bold text-amber-400 font-mono flex items-center gap-1.5 text-xs">
+                    <Box className="w-4 h-4 text-amber-400" />
+                    Propriedades da Peça
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => selectSingleLine(null)}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                    title="Fechar painel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+              {/* Nome */}
+              <div>
+                <label className="text-[10px] text-slate-400 font-mono block mb-1">Nome da Peça</label>
+                <input
+                  type="text"
+                  value={editNameInput}
+                  onChange={(e) => setEditNameInput(e.target.value)}
+                  placeholder="Ex: Travessa Superior"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Tipo */}
+              <div>
+                <label className="text-[10px] text-slate-400 font-mono block mb-1">Tipo da Peça</label>
+                <select
+                  value={editTypeInput}
+                  onChange={(e) => setEditTypeInput(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
                 >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+                  <option value="travessa">Travessa Horizontal</option>
+                  <option value="divisao_vertical">Montante / Divisão Vertical</option>
+                  <option value="coluna">Coluna / Pé Lateral</option>
+                  <option value="diagonal">Diagonal Estrutural</option>
+                  <option value="reforco">Reforço Mão de Força</option>
+                  <option value="quadro_interno">Quadro Interno</option>
+                  <option value="folha_porta">Folha de Porta</option>
+                  <option value="folha_portao">Folha de Portão</option>
+                  <option value="folha_janela">Folha de Janela</option>
+                  <option value="batente">Batente / Trilho</option>
+                  <option value="perfil_personalizado">Perfil Personalizado</option>
+                </select>
               </div>
 
-              <div>
-                <label className="text-[10px] text-slate-400 font-mono block mb-1">Comprimento (mm)</label>
-                <input
-                  type="number"
-                  value={editLengthInput}
-                  onChange={(e) => setEditLengthInput(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] text-slate-400 font-mono block mb-1">Ângulo (°)</label>
-                <input
-                  type="number"
-                  value={editAngleInput}
-                  onChange={(e) => setEditAngleInput(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
+              {/* Perfil Metálico */}
               <div>
                 <label className="text-[10px] text-slate-400 font-mono block mb-1">Perfil Metálico</label>
                 <select
@@ -2027,13 +2460,111 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                 </select>
               </div>
 
+              {/* Comprimento & Ângulo */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-mono block mb-1">Comprimento (mm)</label>
+                  <input
+                    type="number"
+                    value={editLengthInput}
+                    onChange={(e) => setEditLengthInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-mono block mb-1">Ângulo (°)</label>
+                  <input
+                    type="number"
+                    value={editAngleInput}
+                    onChange={(e) => setEditAngleInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Posição X & Y */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-mono block mb-1">Posição X (mm)</label>
+                  <input
+                    type="number"
+                    value={editPosXInput}
+                    onChange={(e) => setEditPosXInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-mono block mb-1">Posição Y (mm)</label>
+                  <input
+                    type="number"
+                    value={editPosYInput}
+                    onChange={(e) => setEditPosYInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Observações */}
+              <div>
+                <label className="text-[10px] text-slate-400 font-mono block mb-1">Observações</label>
+                <input
+                  type="text"
+                  value={editObservationsInput}
+                  onChange={(e) => setEditObservationsInput(e.target.value)}
+                  placeholder="Ex: Corte especial 45°"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Botão Salvar / Recalcular */}
               <button
+                type="button"
                 onClick={handleApplyLineEdits}
-                className="w-full py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer"
+                className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer shadow-md active:scale-[0.98]"
               >
-                Atualizar Peça
+                💾 Salvar / Recalcular Peça
               </button>
+
+              {/* Ações Rápidas da Peça */}
+              <div className="border-t border-slate-800 pt-2 space-y-1.5">
+                <span className="text-[10px] text-slate-400 font-mono block uppercase">Ações na Peça</span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleDuplicateSelectedPiece}
+                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] rounded-lg transition cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Duplicar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMirrorSelectedPiece('horizontal')}
+                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] rounded-lg transition cursor-pointer flex items-center justify-center gap-1"
+                    title="Espelhar Horizontalmente"
+                  >
+                    <span>↔️ Espelhar H</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMirrorSelectedPiece('vertical')}
+                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] rounded-lg transition cursor-pointer flex items-center justify-center gap-1"
+                    title="Espelhar Verticalmente"
+                  >
+                    <span>↕️ Espelhar V</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    className="py-1.5 px-2 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 font-bold text-[11px] rounded-lg border border-rose-500/30 transition cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Remover</span>
+                  </button>
+                </div>
+              </div>
             </div>
+          </div>
           )}
         </div>
 
@@ -2074,12 +2605,67 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                 </div>
               </div>
             ) : (
-              /* Top-Left Piece Count Badge */
-              <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-slate-900/90 border border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl shadow-lg text-xs font-mono text-slate-300">
-                <span className="text-amber-400 font-bold flex items-center gap-1">
-                  <Box className="w-3.5 h-3.5" />
-                  {lines.length} Peças na Estrutura
-                </span>
+              /* Top-Left Piece Count Badge & Selected Piece Floating Actions */
+              <div className="absolute top-3 left-3 right-3 z-10 flex items-center justify-between gap-2 pointer-events-none">
+                <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl shadow-lg text-xs font-mono text-slate-300 pointer-events-auto shrink-0">
+                  <span className="text-amber-400 font-bold flex items-center gap-1">
+                    <Box className="w-3.5 h-3.5" />
+                    {lines.length} Peças
+                  </span>
+                </div>
+
+                {selectedLine && activeTool !== 'area_select' && (
+                  <div className="flex items-center gap-2 bg-slate-900/95 border border-amber-500/60 backdrop-blur-md px-3 py-1.5 rounded-xl shadow-2xl text-xs text-slate-200 pointer-events-auto max-w-full overflow-x-auto">
+                    <span className="font-bold text-amber-400 font-mono truncate max-w-[140px] sm:max-w-[200px]">
+                      {selectedLine.name || 'Peça Selecionada'}
+                    </span>
+                    <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300 font-mono shrink-0 hidden sm:inline-block">
+                      {selectedLine.lengthMm}mm | {selectedLine.profile || defaultProfile}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0 border-l border-slate-800 pl-2">
+                      <button
+                        type="button"
+                        onClick={handleDuplicateSelectedPiece}
+                        className="p-1 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg transition cursor-pointer"
+                        title="Duplicar Peça"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMirrorSelectedPiece('horizontal')}
+                        className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg transition cursor-pointer font-bold text-[10px]"
+                        title="Espelhar Horizontalmente"
+                      >
+                        ↔️
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMirrorSelectedPiece('vertical')}
+                        className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg transition cursor-pointer font-bold text-[10px]"
+                        title="Espelhar Verticalmente"
+                      >
+                        ↕️
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteSelected}
+                        className="p-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded-lg transition cursor-pointer"
+                        title="Remover Peça"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => selectSingleLine(null)}
+                        className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg transition cursor-pointer"
+                        title="Deselecionar"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2126,6 +2712,152 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
                 <text x="10" y="-10" fill="#f59e0b" fontSize={12 / zoom} fontFamily="monospace" fontWeight="bold">
                   (0,0)
                 </text>
+
+                {/* RENDER DETECTED STRUCTURAL PANELS (ET-021.3) */}
+                {PanelManager.getPanels().map((panel) => {
+                  const isHovered = activeHighlightedPanelId === panel.id;
+                  const isSelected = activeSelectedPanelId === panel.id;
+
+                  const pointsStr = panel.vertices.map((v) => `${v.x},${v.y}`).join(' ');
+
+                  let fillColor = 'rgba(59, 130, 246, 0.08)';
+                  let strokeColor = '#3b82f6';
+                  let strokeWidth = 1.5 / zoom;
+                  let strokeDashArray = `${4 / zoom} ${4 / zoom}`;
+
+                  if (isSelected) {
+                    fillColor = 'rgba(245, 158, 11, 0.38)';
+                    strokeColor = '#f59e0b';
+                    strokeWidth = 3.5 / zoom;
+                    strokeDashArray = 'none';
+                  } else if (isHovered) {
+                    fillColor = 'rgba(99, 102, 241, 0.2)';
+                    strokeColor = '#6366f1';
+                    strokeWidth = 2.5 / zoom;
+                    strokeDashArray = 'none';
+                  } else if (activeTool === 'panel') {
+                    fillColor = 'rgba(16, 185, 129, 0.12)';
+                    strokeColor = '#10b981';
+                    strokeWidth = 2 / zoom;
+                  }
+
+                  return (
+                    <g key={panel.id} className="cursor-pointer" onClick={(e) => {
+                      if (activeTool === 'panel') {
+                        e.stopPropagation();
+                        PanelManager.selectPanel(panel.id);
+                      }
+                    }}>
+                      {/* Outer Glow Outline for Selected Panel */}
+                      {isSelected && (
+                        <polygon
+                          points={pointsStr}
+                          fill="none"
+                          stroke="#f59e0b"
+                          strokeWidth={7 / zoom}
+                          strokeOpacity={0.35}
+                        />
+                      )}
+
+                      {/* Panel Surface Polygon */}
+                      <polygon
+                        points={pointsStr}
+                        fill={fillColor}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                        strokeDasharray={strokeDashArray}
+                      />
+
+                      {/* Centroid Badge & Information Label */}
+                      <g transform={`translate(${panel.centroid.x}, ${panel.centroid.y})`}>
+                        <rect
+                          x={-42 / zoom}
+                          y={-18 / zoom}
+                          width={84 / zoom}
+                          height={36 / zoom}
+                          rx={6 / zoom}
+                          fill={isSelected ? '#f59e0b' : isHovered ? '#4f46e5' : '#0f172a'}
+                          fillOpacity={0.9}
+                          stroke={isSelected ? '#ffffff' : strokeColor}
+                          strokeWidth={1.5 / zoom}
+                        />
+                        <text
+                          x="0"
+                          y={-4 / zoom}
+                          fill="#ffffff"
+                          fontSize={11 / zoom}
+                          fontFamily="sans-serif"
+                          fontWeight="bold"
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                        >
+                          {panel.name}
+                        </text>
+                        <text
+                          x="0"
+                          y={9 / zoom}
+                          fill={isSelected ? '#fef3c7' : '#94a3b8'}
+                          fontSize={8.5 / zoom}
+                          fontFamily="monospace"
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                        >
+                          {panel.widthMm}x{panel.heightMm} | {panel.areaM2.toFixed(2)}m²
+                        </text>
+                      </g>
+                    </g>
+                  );
+                })}
+
+                {/* RENDER TEMPORARY PANEL FILL PREVIEWS (ET-021.4) */}
+                {previewFillBars.map((pBar) => (
+                  <g key={pBar.id}>
+                    <line
+                      x1={pBar.x1}
+                      y1={pBar.y1}
+                      x2={pBar.x2}
+                      y2={pBar.y2}
+                      stroke="#06b6d4"
+                      strokeWidth={3 / zoom}
+                      strokeDasharray={`${6 / zoom} ${3 / zoom}`}
+                      strokeOpacity={0.9}
+                    />
+                  </g>
+                ))}
+
+                {/* RENDER TEMPORARY GUIDE BAR (ET-021.4) */}
+                {currentGuideBar && (
+                  <g id="svg-panel-guide-bar">
+                    <line
+                      x1={currentGuideBar.p1.x}
+                      y1={currentGuideBar.p1.y}
+                      x2={currentGuideBar.p2.x}
+                      y2={currentGuideBar.p2.y}
+                      stroke="#ec4899"
+                      strokeWidth={4 / zoom}
+                      strokeDasharray={`${8 / zoom} ${4 / zoom}`}
+                    />
+                    <circle cx={currentGuideBar.p1.x} cy={currentGuideBar.p1.y} r={6 / zoom} fill="#ec4899" />
+                    <circle cx={currentGuideBar.p2.x} cy={currentGuideBar.p2.y} r={6 / zoom} fill="#ec4899" />
+                  </g>
+                )}
+
+                {/* ACTIVE GUIDE BAR BEING DRAWN */}
+                {guideBarStart && currentCursor && (
+                  <g id="svg-active-guide-bar-drawing">
+                    <line
+                      x1={guideBarStart.x}
+                      y1={guideBarStart.y}
+                      x2={currentCursor.x}
+                      y2={currentCursor.y}
+                      stroke="#f59e0b"
+                      strokeWidth={3 / zoom}
+                      strokeDasharray={`${6 / zoom} ${3 / zoom}`}
+                    />
+                    <circle cx={guideBarStart.x} cy={guideBarStart.y} r={5 / zoom} fill="#f59e0b" />
+                    <circle cx={currentCursor.x} cy={currentCursor.y} r={5 / zoom} fill="#f59e0b" />
+                  </g>
+                )}
 
                 {/* Selection Box for Area Selection (ET-009C.1 / ET-009C.1D) */}
                 {selectionBox && (
@@ -2579,6 +3311,239 @@ export const FreeDrawingModule: React.FC<FreeDrawingModuleProps> = ({
           </div>
         );
       })()}
+
+      {/* CARTÃO DE INFORMAÇÕES DO PAINEL (ET-021.3) */}
+      {activeTool === 'panel' && (() => {
+        const selectedPanel = activeSelectedPanelId ? PanelManager.getPanelById(activeSelectedPanelId) : null;
+        const summary = PanelManager.getPanelSummary();
+
+        return (
+          <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/98 border border-amber-500/80 backdrop-blur-md p-4 rounded-2xl shadow-2xl flex flex-col gap-3 w-[92vw] max-w-lg text-white animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+                  <Box className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-extrabold text-white font-display">
+                      {selectedPanel ? selectedPanel.name : 'Sistema Inteligente de Painéis'}
+                    </h3>
+                    <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono font-bold text-[10px] px-2 py-0.5 rounded-full">
+                      ET-021.3 Ativo
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    {selectedPanel ? 'Superfície Fechada Selecionada' : `${summary.totalCount} painéis detectados na estrutura`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTool('select');
+                  PanelManager.selectPanel(null);
+                }}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                title="Sair do Modo Painel"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {selectedPanel ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-950/90 p-3 rounded-xl border border-slate-800 text-xs font-mono">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase">Largura x Altura</span>
+                    <span className="font-bold text-amber-300">{selectedPanel.widthMm} x {selectedPanel.heightMm} mm</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase">Área</span>
+                    <span className="font-bold text-emerald-400">{selectedPanel.areaM2.toFixed(3)} m²</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase">Perímetro</span>
+                    <span className="font-bold text-sky-300">{selectedPanel.perimeterMm} mm</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase">Barras Perímetro</span>
+                    <span className="font-bold text-purple-300">{selectedPanel.contourBarIds.length} barras</span>
+                  </div>
+                </div>
+
+                <div className="bg-amber-500/10 border border-amber-500/30 p-2.5 rounded-xl text-xs text-amber-200/90 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div className="text-[11px] leading-relaxed">
+                      {selectedPanel.fillConfig ? (
+                        <span>
+                          <strong>Preenchimento Ativo:</strong> {selectedPanel.fillConfig.pattern.toUpperCase()} ({selectedPanel.fillConfig.spacingMm}mm)
+                        </span>
+                      ) : (
+                        <span>Desenhe uma <strong>Barra Guia</strong> ou abra o <strong>Assistente de Preenchimento</strong>.</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsPanelFillAssistantOpen(true)}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs rounded-lg transition cursor-pointer shrink-0 shadow"
+                  >
+                    {selectedPanel.fillConfig ? 'Editar Preenchimento' : '✨ Preencher Painel'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="grid grid-cols-3 gap-2 bg-slate-950/90 p-3 rounded-xl border border-slate-800 text-xs font-mono">
+                <div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Total Painéis</span>
+                  <span className="font-bold text-amber-300">{summary.totalCount} painéis</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Área Total</span>
+                  <span className="font-bold text-emerald-400">{summary.totalAreaM2.toFixed(3)} m²</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Ação</span>
+                  <span className="text-slate-300 text-[11px] block">Toque em uma área</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsPanelTestModalOpen(true)}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow active:scale-95"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Validar ET-021.3 / ET-021.4</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTool('select');
+                  PanelManager.selectPanel(null);
+                  setPreviewFillBars([]);
+                  setCurrentGuideBar(null);
+                }}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                Voltar ao Desenho
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL ASSISTENTE INTELIGENTE DE PREENCHIMENTO DE PAINÉIS (ET-021.4) */}
+      {isPanelFillAssistantOpen && activeSelectedPanelId && (() => {
+        const selectedPanel = PanelManager.getPanelById(activeSelectedPanelId);
+        if (!selectedPanel) return null;
+
+        return (
+          <PanelFillAssistantModal
+            panel={selectedPanel}
+            guideBar={currentGuideBar || undefined}
+            existingLines={lines}
+            onPreview={(bars) => {
+              setPreviewFillBars(bars);
+            }}
+            onApply={(config, bars) => {
+              const { updatedLines } = applyPanelFill(lines, selectedPanel, config, bars);
+              commitLinesState(updatedLines);
+              PanelManager.updatePanels(updatedLines);
+              setPreviewFillBars([]);
+              setCurrentGuideBar(null);
+              setIsPanelFillAssistantOpen(false);
+              showToast(`✅ Preenchimento aplicado com sucesso no ${selectedPanel.name}!`);
+            }}
+            onRemoveFill={(panelId) => {
+              const updatedLines = removePanelFill(lines, selectedPanel);
+              commitLinesState(updatedLines);
+              PanelManager.updatePanels(updatedLines);
+              setPreviewFillBars([]);
+              setCurrentGuideBar(null);
+              setIsPanelFillAssistantOpen(false);
+              showToast(`Preenchimento removido do ${selectedPanel.name}.`);
+            }}
+            onClose={() => {
+              setIsPanelFillAssistantOpen(false);
+              setPreviewFillBars([]);
+            }}
+          />
+        );
+      })()}
+
+      {/* MODAL DE VALIDAÇÃO DA SUÍTE DE TESTES ET-021.3 */}
+      {isPanelTestModalOpen && (
+        <div className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl border border-amber-500/50 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-amber-500 text-slate-950 px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-slate-950" />
+                <div>
+                  <h3 className="text-base font-bold font-display text-slate-950">
+                    Validação ET-021.3 - Sistema de Painéis
+                  </h3>
+                  <span className="text-[10px] font-mono text-slate-900 font-bold">
+                    Infraestrutura Independente de Painéis
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPanelTestModalOpen(false)}
+                className="p-1 text-slate-950 hover:bg-amber-400 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-3">
+              <div className="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                Executando testes automatizados do Sistema de Painéis e Assistente de Preenchimento (ET-021.3 & ET-021.4)...
+              </div>
+
+              {[...runPanelEngineValidationTests(), ...runPanelFillEngineValidationTests()].map((test) => (
+                <div
+                  key={test.testId}
+                  className={`p-3.5 rounded-xl border ${
+                    test.passed
+                      ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-200'
+                      : 'bg-rose-950/30 border-rose-800/60 text-rose-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-xs text-amber-400">{test.testId}</span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        test.passed ? 'bg-emerald-500 text-slate-950' : 'bg-rose-500 text-white'
+                      }`}
+                    >
+                      {test.passed ? 'APROVADO' : 'FALHOU'}
+                    </span>
+                  </div>
+                  <div className="font-bold text-xs text-slate-100">{test.name}</div>
+                  <div className="text-[11px] text-slate-300 mt-1">{test.message}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsPanelTestModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MENU SIMPLES - MODO SELEÇÃO DE ÁREA (ET-009C.1D) */}
       {isSelectionMenuOpen && activeTool === 'area_select' && (
