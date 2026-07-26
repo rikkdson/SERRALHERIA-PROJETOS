@@ -126,27 +126,56 @@ export const PIECE_TYPE_LABELS: Record<PieceType, string> = {
   perfil_personalizado: 'Perfil Personalizado'
 };
 
+export type ProfileCategory =
+  | 'Metalon'
+  | 'Tubo Redondo'
+  | 'Tubo Quadrado'
+  | 'Tubo Retangular'
+  | 'Cantoneira'
+  | 'Barra Chata'
+  | 'Perfil U'
+  | 'Perfil U Enrijecido'
+  | 'Perfil C'
+  | 'Perfil Z'
+  | 'Perfil I'
+  | 'Perfil H'
+  | 'Perfil T'
+  | 'Vergalhão'
+  | 'Barra Maciça Redonda'
+  | 'Barra Maciça Quadrada'
+  | 'Chapa Lisa'
+  | 'Chapa Xadrez'
+  | 'Outros';
+
+export type MaterialUnit = 'barra' | 'm' | 'kg' | 'm2' | 'chapa';
+
 export interface MaterialProfile {
   id: string;
-  name: string;             // Nome ex: "Metalon 15x15", "Metalon 30x30"
+  name: string;             // Nome ex: "Metalon 15x15", "Tubo Redondo 2\""
+  category: ProfileCategory; // Categoria do perfil
   widthMm: number;          // Largura em mm ex: 15, 30
   heightMm: number;         // Altura em mm ex: 15, 30
-  wallThicknessMm: number;  // Espessura da parede em mm ex: 1.2, 1.5, 2.0
-  weightKgPerMeter: number; // Peso por metro (kg)
+  wallThicknessMm: number;  // Espessura da parede / chapa em mm ex: 1.2, 1.5, 2.0
+  weightKgPerMeter: number; // Peso por metro (kg/m) ou por m²
   costPerMeter: number;     // Valor por metro (R$)
-  costPerBar: number;       // Valor por barra (R$)
+  costPerBar: number;       // Valor por barra / unidade (R$)
   defaultBarLengthMm: number; // Comprimento comercial padrão em mm (ex: 6000)
-  supplier?: string;        // Fornecedor (opcional)
-  notes?: string;           // Observações (opcional)
+  unit?: MaterialUnit;      // Unidade de venda
+  supplier?: string;        // Fornecedor / Fabricante
+  manufacturer?: string;    // Fabricante oficial
+  notes?: string;           // Observações
   isDefault?: boolean;      // Perfil padrão (protegido contra exclusão)
+  isArchived?: boolean;     // Perfil arquivado
   createdAt?: string;
   updatedAt?: string;
 }
 
 export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
+  // 1. METALON
   {
     id: 'mat-15x15',
     name: 'Metalon 15x15',
+    category: 'Metalon',
     widthMm: 15,
     heightMm: 15,
     wallThicknessMm: 1.2,
@@ -154,13 +183,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 8.50,
     costPerBar: 51.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau / Tubos Ibirá',
+    manufacturer: 'Gerdau',
     notes: 'Perfil quadrado leve para acabamento e quadros pequenos',
     isDefault: true
   },
   {
     id: 'mat-20x20',
     name: 'Metalon 20x20',
+    category: 'Metalon',
     widthMm: 20,
     heightMm: 20,
     wallThicknessMm: 1.2,
@@ -168,13 +200,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 11.50,
     costPerBar: 69.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
     notes: 'Perfil quadrado standard para grades e caixilhos',
     isDefault: true
   },
   {
     id: 'mat-30x20',
     name: 'Metalon 30x20',
+    category: 'Metalon',
     widthMm: 30,
     heightMm: 20,
     wallThicknessMm: 1.2,
@@ -182,13 +217,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 13.80,
     costPerBar: 82.80,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'AçoCearense / Vallourec',
+    manufacturer: 'AçoCearense',
     notes: 'Perfil retangular para travessas e fechamentos',
     isDefault: true
   },
   {
     id: 'mat-30x30',
     name: 'Metalon 30x30',
+    category: 'Metalon',
     widthMm: 30,
     heightMm: 30,
     wallThicknessMm: 1.5,
@@ -196,13 +234,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 18.00,
     costPerBar: 108.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
     notes: 'Perfil quadrado para portões leves e caixilhos',
     isDefault: true
   },
   {
     id: 'mat-40x20',
     name: 'Metalon 40x20',
+    category: 'Metalon',
     widthMm: 40,
     heightMm: 20,
     wallThicknessMm: 1.2,
@@ -210,13 +251,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 16.50,
     costPerBar: 99.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
     notes: 'Perfil retangular para réguas e montantes',
     isDefault: true
   },
   {
     id: 'mat-40x40',
     name: 'Metalon 40x40',
+    category: 'Metalon',
     widthMm: 40,
     heightMm: 40,
     wallThicknessMm: 1.5,
@@ -224,13 +268,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 24.50,
     costPerBar: 147.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
     notes: 'Perfil quadrado estrutural para portões e caixilhos reforçados',
     isDefault: true
   },
   {
     id: 'mat-50x30',
     name: 'Metalon 50x30',
+    category: 'Metalon',
     widthMm: 50,
     heightMm: 30,
     wallThicknessMm: 1.5,
@@ -238,13 +285,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 25.00,
     costPerBar: 150.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'Gerdau / ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
     notes: 'Perfil retangular para quadros de portão social e basculantes',
     isDefault: true
   },
   {
     id: 'mat-50x50',
     name: 'Metalon 50x50',
+    category: 'Metalon',
     widthMm: 50,
     heightMm: 50,
     wallThicknessMm: 2.0,
@@ -252,13 +302,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 38.00,
     costPerBar: 228.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
     notes: 'Perfil quadrado pesado para colunas e travessas verticais',
     isDefault: true
   },
   {
     id: 'mat-60x40',
     name: 'Metalon 60x40',
+    category: 'Metalon',
     widthMm: 60,
     heightMm: 40,
     wallThicknessMm: 2.0,
@@ -266,13 +319,16 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 39.50,
     costPerBar: 237.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
     notes: 'Perfil retangular robusto para vigas e colunas principais',
     isDefault: true
   },
   {
     id: 'mat-80x40',
     name: 'Metalon 80x40',
+    category: 'Metalon',
     widthMm: 80,
     heightMm: 40,
     wallThicknessMm: 2.0,
@@ -280,8 +336,384 @@ export const DEFAULT_MATERIAL_PROFILES: MaterialProfile[] = [
     costPerMeter: 48.00,
     costPerBar: 288.00,
     defaultBarLengthMm: 6000,
+    unit: 'barra',
     supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
     notes: 'Perfil pesado para estrutura industrial e grandes portões',
+    isDefault: true
+  },
+
+  // 2. TUBO REDONDO
+  {
+    id: 'mat-tubo-red-1pol',
+    name: 'Tubo Redondo 1" (25.4mm) x 1.2mm',
+    category: 'Tubo Redondo',
+    widthMm: 25.4,
+    heightMm: 25.4,
+    wallThicknessMm: 1.2,
+    weightKgPerMeter: 0.72,
+    costPerMeter: 12.00,
+    costPerBar: 72.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Tubo industrial redondo para corrimãos e grades',
+    isDefault: true
+  },
+  {
+    id: 'mat-tubo-red-2pol',
+    name: 'Tubo Redondo 2" (50.8mm) x 1.5mm',
+    category: 'Tubo Redondo',
+    widthMm: 50.8,
+    heightMm: 50.8,
+    wallThicknessMm: 1.5,
+    weightKgPerMeter: 1.83,
+    costPerMeter: 28.00,
+    costPerBar: 168.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Vallourec',
+    manufacturer: 'Vallourec',
+    notes: 'Tubo circular reforçado para pilares e guarda-corpos',
+    isDefault: true
+  },
+
+  // 3. TUBO QUADRADO
+  {
+    id: 'mat-tubo-quad-100x100',
+    name: 'Tubo Quadrado 100x100 x 3.0mm',
+    category: 'Tubo Quadrado',
+    widthMm: 100,
+    heightMm: 100,
+    wallThicknessMm: 3.0,
+    weightKgPerMeter: 8.96,
+    costPerMeter: 92.00,
+    costPerBar: 552.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
+    notes: 'Coluna estrutural quadrada para galpões e mezaninos',
+    isDefault: true
+  },
+
+  // 4. TUBO RETANGULAR
+  {
+    id: 'mat-tubo-ret-100x50',
+    name: 'Tubo Retangular 100x50 x 3.0mm',
+    category: 'Tubo Retangular',
+    widthMm: 100,
+    heightMm: 50,
+    wallThicknessMm: 3.0,
+    weightKgPerMeter: 6.60,
+    costPerMeter: 68.00,
+    costPerBar: 408.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
+    notes: 'Viga retangular estrutural pesada',
+    isDefault: true
+  },
+
+  // 5. CANTONEIRA
+  {
+    id: 'mat-cantoneira-1pol',
+    name: 'Cantoneira 1" x 1/8" (25.4x3.17mm)',
+    category: 'Cantoneira',
+    widthMm: 25.4,
+    heightMm: 25.4,
+    wallThicknessMm: 3.17,
+    weightKgPerMeter: 1.19,
+    costPerMeter: 15.00,
+    costPerBar: 90.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Laminado em L para reforço de cantos e quadros',
+    isDefault: true
+  },
+  {
+    id: 'mat-cantoneira-1.5pol',
+    name: 'Cantoneira 1.1/2" x 3/16" (38.1x4.75mm)',
+    category: 'Cantoneira',
+    widthMm: 38.1,
+    heightMm: 38.1,
+    wallThicknessMm: 4.75,
+    weightKgPerMeter: 2.62,
+    costPerMeter: 31.00,
+    costPerBar: 186.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Cantoneira laminada estrutural para suportes e treliças',
+    isDefault: true
+  },
+
+  // 6. BARRA CHATA
+  {
+    id: 'mat-barra-chata-3/4x1/8',
+    name: 'Barra Chata 3/4" x 1/8" (19x3.17mm)',
+    category: 'Barra Chata',
+    widthMm: 19.0,
+    heightMm: 3.17,
+    wallThicknessMm: 3.17,
+    weightKgPerMeter: 0.47,
+    costPerMeter: 7.50,
+    costPerBar: 45.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Barra laminada para travamentos e ornamentos',
+    isDefault: true
+  },
+  {
+    id: 'mat-barra-chata-1x3/16',
+    name: 'Barra Chata 1" x 3/16" (25.4x4.75mm)',
+    category: 'Barra Chata',
+    widthMm: 25.4,
+    heightMm: 4.75,
+    wallThicknessMm: 4.75,
+    weightKgPerMeter: 0.95,
+    costPerMeter: 13.00,
+    costPerBar: 78.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Barra chata laminada para portões e suportes',
+    isDefault: true
+  },
+
+  // 7. PERFIL U
+  {
+    id: 'mat-perfil-u-3pol',
+    name: 'Perfil U Simples 3" (75x40 x 3.0mm)',
+    category: 'Perfil U',
+    widthMm: 75,
+    heightMm: 40,
+    wallThicknessMm: 3.0,
+    weightKgPerMeter: 3.42,
+    costPerMeter: 42.00,
+    costPerBar: 252.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Perfil dobrado em U simples para terças e vigas',
+    isDefault: true
+  },
+
+  // 8. PERFIL U ENRIJECIDO
+  {
+    id: 'mat-perfil-ue-100x50',
+    name: 'Perfil U Enrijecido 100x50x17 x 2.0mm',
+    category: 'Perfil U Enrijecido',
+    widthMm: 100,
+    heightMm: 50,
+    wallThicknessMm: 2.0,
+    weightKgPerMeter: 3.40,
+    costPerMeter: 45.00,
+    costPerBar: 270.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'AçoCearense',
+    manufacturer: 'AçoCearense',
+    notes: 'Perfil C/U com aba enrijecida para estruturas metálicas leve/médias',
+    isDefault: true
+  },
+
+  // 9. PERFIL C
+  {
+    id: 'mat-perfil-c-100x50',
+    name: 'Perfil C 100x50 x 2.0mm',
+    category: 'Perfil C',
+    widthMm: 100,
+    heightMm: 50,
+    wallThicknessMm: 2.0,
+    weightKgPerMeter: 3.10,
+    costPerMeter: 40.00,
+    costPerBar: 240.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'ArcelorMittal',
+    manufacturer: 'ArcelorMittal',
+    notes: 'Perfil estrutural formado a frio',
+    isDefault: true
+  },
+
+  // 10. PERFIL Z
+  {
+    id: 'mat-perfil-z-100x50',
+    name: 'Perfil Z 100x50 x 2.0mm',
+    category: 'Perfil Z',
+    widthMm: 100,
+    heightMm: 50,
+    wallThicknessMm: 2.0,
+    weightKgPerMeter: 3.10,
+    costPerMeter: 41.00,
+    costPerBar: 246.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Tuper',
+    manufacturer: 'Tuper',
+    notes: 'Perfil Z para terças de cobertura com transpasse',
+    isDefault: true
+  },
+
+  // 11. PERFIL I
+  {
+    id: 'mat-perfil-i-w150',
+    name: 'Perfil I W 150x13.0 (150x100mm)',
+    category: 'Perfil I',
+    widthMm: 100,
+    heightMm: 150,
+    wallThicknessMm: 4.9,
+    weightKgPerMeter: 13.0,
+    costPerMeter: 145.00,
+    costPerBar: 1740.00,
+    defaultBarLengthMm: 12000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Perfil I laminado W para vigas estruturais de grande vão',
+    isDefault: true
+  },
+
+  // 12. PERFIL H
+  {
+    id: 'mat-perfil-h-w150',
+    name: 'Perfil H W 150x22.5 (150x150mm)',
+    category: 'Perfil H',
+    widthMm: 150,
+    heightMm: 150,
+    wallThicknessMm: 6.6,
+    weightKgPerMeter: 22.5,
+    costPerMeter: 240.00,
+    costPerBar: 2880.00,
+    defaultBarLengthMm: 12000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Perfil H laminado W para pilares pesados',
+    isDefault: true
+  },
+
+  // 13. PERFIL T
+  {
+    id: 'mat-perfil-t-1pol',
+    name: 'Perfil T 1" x 1/8" (25.4x25.4 x 3.17mm)',
+    category: 'Perfil T',
+    widthMm: 25.4,
+    heightMm: 25.4,
+    wallThicknessMm: 3.17,
+    weightKgPerMeter: 1.19,
+    costPerMeter: 16.00,
+    costPerBar: 96.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Perfil T laminado para caixilharia de galpão e esquadrias',
+    isDefault: true
+  },
+
+  // 14. VERGALHÃO
+  {
+    id: 'mat-vergalhao-3/8',
+    name: 'Vergalhão CA-50 3/8" (9.5mm)',
+    category: 'Vergalhão',
+    widthMm: 9.5,
+    heightMm: 9.5,
+    wallThicknessMm: 9.5,
+    weightKgPerMeter: 0.56,
+    costPerMeter: 6.50,
+    costPerBar: 78.00,
+    defaultBarLengthMm: 12000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Aço nervurado CA-50 para armações de concreto e tirantes',
+    isDefault: true
+  },
+
+  // 15. BARRA MACIÇA REDONDA
+  {
+    id: 'mat-macica-red-1/2',
+    name: 'Barra Maciça Redonda 1/2" (12.7mm)',
+    category: 'Barra Maciça Redonda',
+    widthMm: 12.7,
+    heightMm: 12.7,
+    wallThicknessMm: 12.7,
+    weightKgPerMeter: 0.99,
+    costPerMeter: 12.50,
+    costPerBar: 75.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Barra redonda maciça para grades de proteção e eixos',
+    isDefault: true
+  },
+
+  // 16. BARRA MACIÇA QUADRADA
+  {
+    id: 'mat-macica-quad-1/2',
+    name: 'Barra Maciça Quadrada 1/2" (12.7mm)',
+    category: 'Barra Maciça Quadrada',
+    widthMm: 12.7,
+    heightMm: 12.7,
+    wallThicknessMm: 12.7,
+    weightKgPerMeter: 1.27,
+    costPerMeter: 15.50,
+    costPerBar: 93.00,
+    defaultBarLengthMm: 6000,
+    unit: 'barra',
+    supplier: 'Gerdau',
+    manufacturer: 'Gerdau',
+    notes: 'Barra quadrada maciça para portões clássicos e grades reforçadas',
+    isDefault: true
+  },
+
+  // 17. CHAPA LISA
+  {
+    id: 'mat-chapa-lisa-18',
+    name: 'Chapa Lisa FF #18 (1.20mm) 2000x1000mm',
+    category: 'Chapa Lisa',
+    widthMm: 1000,
+    heightMm: 2000,
+    wallThicknessMm: 1.2,
+    weightKgPerMeter: 9.42, // kg/m²
+    costPerMeter: 85.00,
+    costPerBar: 170.00, // Preço por chapa
+    defaultBarLengthMm: 2000,
+    unit: 'chapa',
+    supplier: 'CSN',
+    manufacturer: 'CSN',
+    notes: 'Chapa de aço fina a frio para fechamento de portões',
+    isDefault: true
+  },
+
+  // 18. CHAPA XADREZ
+  {
+    id: 'mat-chapa-xadrez-1/8',
+    name: 'Chapa Xadrez Antiderrapante #1/8" (3.17mm) 2000x1000mm',
+    category: 'Chapa Xadrez',
+    widthMm: 1000,
+    heightMm: 2000,
+    wallThicknessMm: 3.17,
+    weightKgPerMeter: 26.5, // kg/m²
+    costPerMeter: 220.00,
+    costPerBar: 440.00,
+    defaultBarLengthMm: 2000,
+    unit: 'chapa',
+    supplier: 'Usiminas',
+    manufacturer: 'Usiminas',
+    notes: 'Chapa antiderrapante para degraus e rampas de acesso',
     isDefault: true
   }
 ];

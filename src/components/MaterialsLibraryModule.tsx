@@ -27,15 +27,21 @@ import {
   TrendingUp,
   Layers,
   ShoppingBag,
-  FileCheck
+  FileCheck,
+  Archive,
+  ArchiveRestore,
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
-import { MaterialProfile } from '../types';
+import { MaterialProfile, ProfileCategory, MaterialUnit } from '../types';
 import { 
   getMaterialProfiles, 
   addMaterialProfile, 
   updateMaterialProfile, 
   duplicateMaterialProfile, 
+  toggleArchiveMaterialProfile,
   deleteMaterialProfile,
+  runMaterialsLibraryValidationTests,
   MATERIALS_UPDATED_EVENT 
 } from '../utils/materialsStore';
 
@@ -43,13 +49,35 @@ interface MaterialsLibraryModuleProps {
   onSelectProfileForProject?: (profileName: string) => void;
 }
 
+const ALL_CATEGORIES: ProfileCategory[] = [
+  'Metalon',
+  'Tubo Redondo',
+  'Tubo Quadrado',
+  'Tubo Retangular',
+  'Cantoneira',
+  'Barra Chata',
+  'Perfil U',
+  'Perfil U Enrijecido',
+  'Perfil C',
+  'Perfil Z',
+  'Perfil I',
+  'Perfil H',
+  'Perfil T',
+  'Vergalhão',
+  'Barra Maciça Redonda',
+  'Barra Maciça Quadrada',
+  'Chapa Lisa',
+  'Chapa Xadrez',
+  'Outros'
+];
+
 export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () => {
   const [profiles, setProfiles] = useState<MaterialProfile[]>([]);
   
   // Filter states
   const [searchQuery, setSearchQuery] = useState('');
-  const [measureFilter, setMeasureFilter] = useState<string>('todos');
-  const [thicknessFilter, setThicknessFilter] = useState<string>('todos');
+  const [selectedCategory, setSelectedCategory] = useState<string>('todos');
+  const [showArchived, setShowArchived] = useState<boolean>(false);
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -57,9 +85,13 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
   const [deleteConfirmProfile, setDeleteConfirmProfile] = useState<MaterialProfile | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Validation report modal state
+  const [validationReport, setValidationReport] = useState<ReturnType<typeof runMaterialsLibraryValidationTests> | null>(null);
+
   // Form states for Create/Edit
   const [formData, setFormData] = useState({
     name: '',
+    category: 'Metalon' as ProfileCategory,
     widthMm: '30',
     heightMm: '30',
     wallThicknessMm: '1.5',
@@ -67,6 +99,8 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
     costPerMeter: '18.00',
     costPerBar: '108.00',
     defaultBarLengthMm: '6000',
+    unit: 'barra' as MaterialUnit,
+    manufacturer: 'Gerdau',
     supplier: '',
     notes: ''
   });
@@ -74,7 +108,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
 
   // Fetch profiles on mount & listen to updates
   const loadProfiles = () => {
-    setProfiles(getMaterialProfiles());
+    setProfiles(getMaterialProfiles({ includeArchived: true }));
   };
 
   useEffect(() => {
@@ -121,24 +155,43 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
     }
   };
 
-  // Estimate theoretical weight for steel tube (Density = 7.85 g/cm³)
+  // Estimate theoretical weight for steel tube / bar / sheet
   const handleAutoCalculateWeight = () => {
     const w = parseFloat(formData.widthMm) || 0;
     const h = parseFloat(formData.heightMm) || 0;
     const t = parseFloat(formData.wallThicknessMm) || 0;
 
     if (w > 0 && h > 0 && t > 0) {
-      // Perimeter in mm = 2*(w + h)
-      // Cross-sectional area approx = perimeter * thickness (in mm²)
-      const perimeterMm = 2 * (w + h);
-      const areaMm2 = perimeterMm * t;
-      // Volume per meter (1000 mm) = areaMm2 * 1000 mm³
-      // Steel density = 0.00000785 kg/mm³
-      const weightKgPerMeter = areaMm2 * 1000 * 0.00000785;
-      setFormData(prev => ({
-        ...prev,
-        weightKgPerMeter: weightKgPerMeter.toFixed(2)
-      }));
+      if (formData.category.startsWith('Chapa')) {
+        // Sheet weight approx kg/m² = thickness * 7.85
+        const weightKgPerM2 = t * 7.85;
+        setFormData(prev => ({ ...prev, weightKgPerMeter: weightKgPerM2.toFixed(2) }));
+      } else if (formData.category === 'Tubo Redondo' || formData.category === 'Vergalhão' || formData.category === 'Barra Maciça Redonda') {
+        // Circular cross section or tube
+        if (formData.category === 'Tubo Redondo') {
+          // Outer radius R = w/2, inner radius r = R - t
+          const R = w / 2;
+          const r = Math.max(0, R - t);
+          const areaMm2 = Math.PI * (R * R - r * r);
+          const weight = areaMm2 * 1000 * 0.00000785;
+          setFormData(prev => ({ ...prev, weightKgPerMeter: weight.toFixed(2) }));
+        } else {
+          // Solid round bar
+          const R = w / 2;
+          const areaMm2 = Math.PI * R * R;
+          const weight = areaMm2 * 1000 * 0.00000785;
+          setFormData(prev => ({ ...prev, weightKgPerMeter: weight.toFixed(2) }));
+        }
+      } else {
+        // Tube or angle perimeter approx
+        const perimeterMm = 2 * (w + h);
+        const areaMm2 = perimeterMm * t;
+        const weightKgPerMeter = areaMm2 * 1000 * 0.00000785;
+        setFormData(prev => ({
+          ...prev,
+          weightKgPerMeter: weightKgPerMeter.toFixed(2)
+        }));
+      }
     }
   };
 
@@ -146,7 +199,8 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
   const handleOpenNewModal = () => {
     setEditingProfile(null);
     setFormData({
-      name: 'Metalon ',
+      name: '',
+      category: 'Metalon',
       widthMm: '30',
       heightMm: '30',
       wallThicknessMm: '1.5',
@@ -154,6 +208,8 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
       costPerMeter: '18.00',
       costPerBar: '108.00',
       defaultBarLengthMm: '6000',
+      unit: 'barra',
+      manufacturer: 'Gerdau',
       supplier: 'Gerdau',
       notes: ''
     });
@@ -166,6 +222,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
     setEditingProfile(profile);
     setFormData({
       name: profile.name,
+      category: profile.category || 'Metalon',
       widthMm: profile.widthMm.toString(),
       heightMm: profile.heightMm.toString(),
       wallThicknessMm: profile.wallThicknessMm.toString(),
@@ -173,6 +230,8 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
       costPerMeter: profile.costPerMeter.toString(),
       costPerBar: profile.costPerBar.toString(),
       defaultBarLengthMm: profile.defaultBarLengthMm.toString(),
+      unit: profile.unit || 'barra',
+      manufacturer: profile.manufacturer || profile.supplier || '',
       supplier: profile.supplier || '',
       notes: profile.notes || ''
     });
@@ -183,6 +242,11 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
   // Handle DUPLICATE
   const handleDuplicate = (profile: MaterialProfile) => {
     duplicateMaterialProfile(profile.id);
+  };
+
+  // Handle ARCHIVE toggle
+  const handleToggleArchive = (profile: MaterialProfile) => {
+    toggleArchiveMaterialProfile(profile.id);
   };
 
   // Handle DELETE attempt
@@ -203,6 +267,12 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
     } catch (err: any) {
       setDeleteError(err.message || 'Erro ao excluir perfil.');
     }
+  };
+
+  // Run Homologation
+  const handleRunValidation = () => {
+    const res = runMaterialsLibraryValidationTests();
+    setValidationReport(res);
   };
 
   // Validate form
@@ -228,6 +298,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
 
     const profileData = {
       name: formData.name.trim(),
+      category: formData.category,
       widthMm: parseFloat(formData.widthMm),
       heightMm: parseFloat(formData.heightMm),
       wallThicknessMm: parseFloat(formData.wallThicknessMm),
@@ -235,7 +306,9 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
       costPerMeter: parseFloat(formData.costPerMeter),
       costPerBar: parseFloat(formData.costPerBar),
       defaultBarLengthMm: parseFloat(formData.defaultBarLengthMm),
-      supplier: formData.supplier.trim() || undefined,
+      unit: formData.unit,
+      manufacturer: formData.manufacturer.trim() || undefined,
+      supplier: formData.supplier.trim() || formData.manufacturer.trim() || undefined,
       notes: formData.notes.trim() || undefined
     };
 
@@ -251,50 +324,42 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
   // Filtered profiles list
   const filteredProfiles = useMemo(() => {
     return profiles.filter(profile => {
-      // Search Query filter (matches Name, Supplier, or Notes)
+      // Archive filter
+      if (!showArchived && profile.isArchived) return false;
+      if (showArchived && !profile.isArchived) return false;
+
+      // Search Query filter (matches Name, Category, Manufacturer, Notes)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
         const matchName = profile.name.toLowerCase().includes(query);
-        const matchSupplier = (profile.supplier || '').toLowerCase().includes(query);
+        const matchCategory = (profile.category || '').toLowerCase().includes(query);
+        const matchManufacturer = (profile.manufacturer || profile.supplier || '').toLowerCase().includes(query);
         const matchNotes = (profile.notes || '').toLowerCase().includes(query);
         const matchMeasures = `${profile.widthMm}x${profile.heightMm}`.includes(query);
-        if (!matchName && !matchSupplier && !matchNotes && !matchMeasures) {
+        if (!matchName && !matchCategory && !matchManufacturer && !matchNotes && !matchMeasures) {
           return false;
         }
       }
 
-      // Measures filter
-      if (measureFilter !== 'todos') {
-        const measureKey = `${profile.widthMm}x${profile.heightMm}`;
-        if (measureFilter === 'outros') {
-          const commonList = ['15x15', '20x20', '30x20', '30x30', '40x20', '40x40', '50x30', '50x50', '60x40', '80x40'];
-          if (commonList.includes(measureKey)) return false;
-        } else if (measureKey !== measureFilter) {
-          return false;
-        }
-      }
-
-      // Wall Thickness filter
-      if (thicknessFilter !== 'todos') {
-        if (thicknessFilter === 'outros') {
-          if ([1.2, 1.5, 2.0].includes(profile.wallThicknessMm)) return false;
-        } else {
-          if (profile.wallThicknessMm.toString() !== thicknessFilter) return false;
-        }
+      // Category filter
+      if (selectedCategory !== 'todos') {
+        if (profile.category !== selectedCategory) return false;
       }
 
       return true;
     });
-  }, [profiles, searchQuery, measureFilter, thicknessFilter]);
+  }, [profiles, searchQuery, selectedCategory, showArchived]);
 
   // Statistics
-  const defaultCount = useMemo(() => profiles.filter(p => p.isDefault).length, [profiles]);
-  const customCount = useMemo(() => profiles.filter(p => !p.isDefault).length, [profiles]);
+  const activeProfiles = useMemo(() => profiles.filter(p => !p.isArchived), [profiles]);
+  const defaultCount = useMemo(() => activeProfiles.filter(p => p.isDefault).length, [activeProfiles]);
+  const customCount = useMemo(() => activeProfiles.filter(p => !p.isDefault).length, [activeProfiles]);
+  const categoriesCount = useMemo(() => new Set(activeProfiles.map(p => p.category)).size, [activeProfiles]);
   const avgCostPerMeter = useMemo(() => {
-    if (profiles.length === 0) return 0;
-    const total = profiles.reduce((sum, p) => sum + p.costPerMeter, 0);
-    return (total / profiles.length).toFixed(2);
-  }, [profiles]);
+    if (activeProfiles.length === 0) return '0.00';
+    const total = activeProfiles.reduce((sum, p) => sum + p.costPerMeter, 0);
+    return (total / activeProfiles.length).toFixed(2);
+  }, [activeProfiles]);
 
   return (
     <div className="flex flex-col gap-6 w-full">
@@ -304,29 +369,42 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
           <div className="flex items-center gap-2 mb-2">
             <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1.5">
               <Box className="w-3.5 h-3.5 text-amber-400" />
-              <span>ET-006 • Módulo Oficial</span>
+              <span>ET-020.1 • Repositório Universal</span>
             </span>
             <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
-              Banco de Dados Ativo
+              18 Categorias Oficiais
             </span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold font-display tracking-tight text-white flex items-center gap-3">
-            <span>📦 Biblioteca de Materiais</span>
+            <span>📦 Biblioteca Universal de Perfis e Materiais</span>
           </h2>
           <p className="text-slate-300 text-sm mt-2 max-w-2xl">
-            Gerencie o catálogo de perfis, tubos e barras da serralheria. Todos os cálculos de estrutura, lista de corte e otimização utilizam automaticamente as especificações desta biblioteca.
+            Fonte única oficial de materiais para toda a plataforma. Cadastre, edite, duplique ou arquive perfis metálicos. Todos os cálculos de Render, Lista de Corte, Orçamento e Otimização consomem este repositório.
           </p>
         </div>
 
-        <button
-          id="btn-novo-perfil-header"
-          type="button"
-          onClick={handleOpenNewModal}
-          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5 py-3 rounded-xl transition duration-150 shadow-lg flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] cursor-pointer whitespace-nowrap text-sm shrink-0"
-        >
-          <Plus className="w-5 h-5 stroke-[2.5]" />
-          <span>➕ Novo Perfil</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <button
+            id="btn-executar-homologacao-materiais"
+            type="button"
+            onClick={handleRunValidation}
+            className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/40 font-mono font-bold px-4 py-3 rounded-xl transition duration-150 shadow-md flex items-center gap-2 text-xs cursor-pointer"
+            title="Executar suíte de validação do repositório"
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span>Homologação ET-020.1</span>
+          </button>
+
+          <button
+            id="btn-novo-perfil-header"
+            type="button"
+            onClick={handleOpenNewModal}
+            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5 py-3 rounded-xl transition duration-150 shadow-lg flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] cursor-pointer whitespace-nowrap text-sm shrink-0"
+          >
+            <Plus className="w-5 h-5 stroke-[2.5]" />
+            <span>➕ Novo Perfil</span>
+          </button>
+        </div>
       </div>
 
       {/* Quick Statistics Widgets */}
@@ -336,18 +414,18 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
             <Box className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Total na Biblioteca</p>
-            <p className="text-lg font-bold font-mono text-slate-950">{profiles.length} perfis</p>
+            <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Perfis Ativos</p>
+            <p className="text-lg font-bold font-mono text-slate-950">{activeProfiles.length} perfis</p>
           </div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3">
           <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg">
-            <ShieldCheck className="w-5 h-5" />
+            <Layers className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Perfis Padrão</p>
-            <p className="text-lg font-bold font-mono text-slate-950">{defaultCount} protegidos</p>
+            <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Categorias em Uso</p>
+            <p className="text-lg font-bold font-mono text-slate-950">{categoriesCount} de 18</p>
           </div>
         </div>
 
@@ -357,7 +435,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
           </div>
           <div>
             <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Personalizados</p>
-            <p className="text-lg font-bold font-mono text-slate-950">{customCount} customizados</p>
+            <p className="text-lg font-bold font-mono text-slate-950">{customCount} perfis</p>
           </div>
         </div>
 
@@ -382,7 +460,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar perfil (ex: Metalon 30x30, Gerdau)..."
+            placeholder="Buscar perfil, categoria, fornecedor..."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:border-amber-500 focus:bg-white transition"
           />
           {searchQuery && (
@@ -395,60 +473,49 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
           )}
         </div>
 
-        {/* Dropdown Filters */}
+        {/* Dropdown Filters & Archive Toggle */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
-          {/* Measure Filter */}
+          {/* Category Filter */}
           <div className="flex items-center gap-1.5 text-xs text-slate-600">
-            <Ruler className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-medium hidden sm:inline">Medidas:</span>
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <span className="font-medium hidden sm:inline">Categoria:</span>
             <select
-              id="select-filtro-medidas"
-              value={measureFilter}
-              onChange={(e) => setMeasureFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-amber-500 cursor-pointer"
+              id="select-filtro-categoria"
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-amber-500 cursor-pointer max-w-[180px]"
             >
-              <option value="todos">Todas as Medidas</option>
-              <option value="15x15">15x15 mm</option>
-              <option value="20x20">20x20 mm</option>
-              <option value="30x20">30x20 mm</option>
-              <option value="30x30">30x30 mm</option>
-              <option value="40x20">40x20 mm</option>
-              <option value="40x40">40x40 mm</option>
-              <option value="50x30">50x30 mm</option>
-              <option value="50x50">50x50 mm</option>
-              <option value="60x40">60x40 mm</option>
-              <option value="80x40">80x40 mm</option>
-              <option value="outros">Outras medidas</option>
+              <option value="todos">Todas as Categorias ({ALL_CATEGORIES.length})</option>
+              {ALL_CATEGORIES.map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
             </select>
           </div>
 
-          {/* Thickness Filter */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-600">
-            <Layers className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-medium hidden sm:inline">Espessura:</span>
-            <select
-              id="select-filtro-espessura"
-              value={thicknessFilter}
-              onChange={(e) => setThicknessFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-amber-500 cursor-pointer"
-            >
-              <option value="todos">Todas Espessuras</option>
-              <option value="1.2">1.2 mm (#18)</option>
-              <option value="1.5">1.5 mm (#16)</option>
-              <option value="2.0">2.0 mm (#14)</option>
-              <option value="outros">Outras espessuras</option>
-            </select>
-          </div>
+          {/* Archive Toggle Button */}
+          <button
+            id="btn-toggle-arquivados"
+            type="button"
+            onClick={() => setShowArchived(!showArchived)}
+            className={`px-3 py-2 text-xs font-semibold rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+              showArchived
+                ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold'
+                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+            }`}
+          >
+            <Archive className="w-3.5 h-3.5" />
+            <span>{showArchived ? 'Exibindo Arquivados' : 'Ver Arquivados'}</span>
+          </button>
 
           {/* Reset Filters button */}
-          {(searchQuery || measureFilter !== 'todos' || thicknessFilter !== 'todos') && (
+          {(searchQuery || selectedCategory !== 'todos' || showArchived) && (
             <button
               id="btn-limpar-filtros"
               type="button"
               onClick={() => {
                 setSearchQuery('');
-                setMeasureFilter('todos');
-                setThicknessFilter('todos');
+                setSelectedCategory('todos');
+                setShowArchived(false);
               }}
               className="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition inline-flex items-center gap-1 cursor-pointer"
               title="Limpar todos os filtros"
@@ -465,10 +532,10 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider font-mono flex items-center gap-2">
             <Box className="w-4 h-4 text-amber-500" />
-            <span>Tabela de Perfis Cadastrados</span>
+            <span>Catálogo Oficial de Perfis ({showArchived ? 'Arquivados' : 'Ativos'})</span>
           </h3>
           <span className="text-xs font-mono text-slate-500">
-            Exibindo <strong className="text-slate-900">{filteredProfiles.length}</strong> de {profiles.length} perfis
+            Exibindo <strong className="text-slate-900">{filteredProfiles.length}</strong> perfis
           </span>
         </div>
 
@@ -479,7 +546,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
             </div>
             <p className="text-slate-800 font-bold text-base">Nenhum perfil encontrado</p>
             <p className="text-slate-500 text-xs mt-1 max-w-sm">
-              Tente redefinir os filtros de busca ou clique no botão abaixo para adicionar um novo perfil.
+              Nenhum material encontrado com os filtros selecionados. Tente redefinir a busca ou cadastre um novo perfil.
             </p>
             <button
               onClick={handleOpenNewModal}
@@ -495,21 +562,22 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
               <thead>
                 <tr className="bg-slate-100/80 text-slate-600 font-mono text-[11px] uppercase tracking-wider border-b border-slate-200">
                   <th className="py-3 px-4 font-bold">Perfil / Material</th>
+                  <th className="py-3 px-4 font-bold">Categoria</th>
                   <th className="py-3 px-4 font-bold text-center">Largura × Altura</th>
                   <th className="py-3 px-4 font-bold text-center">Espessura</th>
-                  <th className="py-3 px-4 font-bold text-right">Peso / m</th>
+                  <th className="py-3 px-4 font-bold text-right">Peso Linear</th>
                   <th className="py-3 px-4 font-bold text-right">Valor / m</th>
                   <th className="py-3 px-4 font-bold text-right">Valor / Barra</th>
-                  <th className="py-3 px-4 font-bold text-center">Barra Padrão</th>
-                  <th className="py-3 px-4 font-bold">Fornecedor</th>
-                  <th className="py-3 px-4 font-bold text-center min-w-[130px]">Ações</th>
+                  <th className="py-3 px-4 font-bold text-center">Unidade</th>
+                  <th className="py-3 px-4 font-bold">Fabricante</th>
+                  <th className="py-3 px-4 font-bold text-center min-w-[140px]">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
                 {filteredProfiles.map((profile) => (
                   <tr 
                     key={profile.id}
-                    className="hover:bg-slate-50/80 transition duration-150 group"
+                    className={`hover:bg-slate-50/80 transition duration-150 group ${profile.isArchived ? 'bg-slate-50/60 opacity-75' : ''}`}
                   >
                     {/* Name & Badge */}
                     <td className="py-3.5 px-4 font-sans">
@@ -519,16 +587,21 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                         </span>
                         {profile.isDefault ? (
                           <span 
-                            className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md flex items-center gap-1"
+                            className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0"
                             title="Perfil Padrão do Sistema (Protegido contra exclusão)"
                           >
                             <ShieldCheck className="w-3 h-3 text-blue-600" />
                             <span>Padrão</span>
                           </span>
                         ) : (
-                          <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                          <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0">
                             <Tag className="w-3 h-3 text-amber-600" />
                             <span>Personalizado</span>
+                          </span>
+                        )}
+                        {profile.isArchived && (
+                          <span className="bg-slate-200 text-slate-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md">
+                            Arquivado
                           </span>
                         )}
                       </div>
@@ -539,42 +612,49 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                       )}
                     </td>
 
+                    {/* Category */}
+                    <td className="py-3.5 px-4 font-sans">
+                      <span className="inline-block bg-slate-100 text-slate-800 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-slate-200 whitespace-nowrap">
+                        {profile.category || 'Metalon'}
+                      </span>
+                    </td>
+
                     {/* Dimensions */}
-                    <td className="py-3.5 px-4 text-center font-bold text-slate-700">
+                    <td className="py-3.5 px-4 text-center font-bold text-slate-700 whitespace-nowrap">
                       {profile.widthMm} × {profile.heightMm} mm
                     </td>
 
                     {/* Wall Thickness */}
-                    <td className="py-3.5 px-4 text-center text-slate-600 font-semibold">
+                    <td className="py-3.5 px-4 text-center text-slate-600 font-semibold whitespace-nowrap">
                       {profile.wallThicknessMm} mm
                     </td>
 
                     {/* Weight per Meter */}
-                    <td className="py-3.5 px-4 text-right font-bold text-slate-800">
-                      {profile.weightKgPerMeter.toFixed(2)} kg
+                    <td className="py-3.5 px-4 text-right font-bold text-slate-800 whitespace-nowrap">
+                      {profile.weightKgPerMeter.toFixed(2)} {profile.unit === 'm2' || profile.category.startsWith('Chapa') ? 'kg/m²' : 'kg/m'}
                     </td>
 
                     {/* Cost per Meter */}
-                    <td className="py-3.5 px-4 text-right font-bold text-emerald-700">
+                    <td className="py-3.5 px-4 text-right font-bold text-emerald-700 whitespace-nowrap">
                       R$ {profile.costPerMeter.toFixed(2)}
                     </td>
 
                     {/* Cost per Bar */}
-                    <td className="py-3.5 px-4 text-right font-bold text-slate-900 bg-slate-50/50">
+                    <td className="py-3.5 px-4 text-right font-bold text-slate-900 bg-slate-50/50 whitespace-nowrap">
                       R$ {profile.costPerBar.toFixed(2)}
                     </td>
 
-                    {/* Default Bar Length */}
-                    <td className="py-3.5 px-4 text-center text-slate-600">
-                      {(profile.defaultBarLengthMm / 1000).toFixed(2)} m ({profile.defaultBarLengthMm} mm)
+                    {/* Unit */}
+                    <td className="py-3.5 px-4 text-center text-slate-600 capitalize">
+                      {profile.unit || 'barra'}
                     </td>
 
-                    {/* Supplier */}
+                    {/* Manufacturer */}
                     <td className="py-3.5 px-4 font-sans text-slate-600">
-                      {profile.supplier ? (
+                      {profile.manufacturer || profile.supplier ? (
                         <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-[11px] px-2 py-0.5 rounded-md">
                           <Building2 className="w-3 h-3 text-slate-400" />
-                          <span>{profile.supplier}</span>
+                          <span>{profile.manufacturer || profile.supplier}</span>
                         </span>
                       ) : (
                         <span className="text-slate-300 font-mono text-[10px]">—</span>
@@ -590,7 +670,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                           type="button"
                           onClick={() => handleOpenEditModal(profile)}
                           className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition cursor-pointer"
-                          title="Editar especificações do perfil"
+                          title="Editar perfil"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
@@ -604,6 +684,17 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                           title="Duplicar este perfil"
                         >
                           <Copy className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Archive / Unarchive Button */}
+                        <button
+                          id={`btn-arquivar-perfil-${profile.id}`}
+                          type="button"
+                          onClick={() => handleToggleArchive(profile)}
+                          className="p-1.5 text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition cursor-pointer"
+                          title={profile.isArchived ? "Desarquivar perfil" : "Arquivar perfil"}
+                        >
+                          {profile.isArchived ? <ArchiveRestore className="w-3.5 h-3.5 text-purple-600" /> : <Archive className="w-3.5 h-3.5" />}
                         </button>
 
                         {/* Delete Button */}
@@ -631,35 +722,6 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
         )}
       </div>
 
-      {/* Future Preparation Banner / System Architecture Specs */}
-      <div className="bg-slate-900 text-slate-200 border border-slate-800 rounded-2xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <h4 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
-              Arquitetura Preparada para Expansões Futuras
-            </h4>
-          </div>
-          <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
-            Esta Biblioteca de Materiais já fornece dados unificados de peso (kg/m), custo por metro/barra e fornecedores. As métricas do projeto alimentam automaticamente os futuros módulos de:
-          </p>
-          <div className="flex flex-wrap gap-2 pt-1 font-mono text-[11px]">
-            <span className="bg-slate-800 text-amber-300 border border-slate-700 px-2.5 py-1 rounded-md flex items-center gap-1">
-              <Weight className="w-3 h-3" /> Peso Total do Projeto
-            </span>
-            <span className="bg-slate-800 text-emerald-300 border border-slate-700 px-2.5 py-1 rounded-md flex items-center gap-1">
-              <DollarSign className="w-3 h-3" /> Custo Automático
-            </span>
-            <span className="bg-slate-800 text-sky-300 border border-slate-700 px-2.5 py-1 rounded-md flex items-center gap-1">
-              <Layers className="w-3 h-3" /> Gestão de Estoque
-            </span>
-            <span className="bg-slate-800 text-purple-300 border border-slate-700 px-2.5 py-1 rounded-md flex items-center gap-1">
-              <FileCheck className="w-3 h-3" /> Orçamentos & Compras
-            </span>
-          </div>
-        </div>
-      </div>
-
       {/* CREATE / EDIT MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
@@ -675,7 +737,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                     {editingProfile ? `Editar Perfil: ${editingProfile.name}` : '➕ Novo Perfil de Material'}
                   </h3>
                   <p className="text-xs text-slate-400 font-mono">
-                    {editingProfile ? 'Atualize as propriedades e preços do perfil' : 'Cadastre um novo perfil para uso em todo o aplicativo'}
+                    Cadastre as propriedades de qualquer material para consumo global no aplicativo
                   </p>
                 </div>
               </div>
@@ -690,22 +752,40 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
 
             {/* Modal Form */}
             <form onSubmit={handleSaveProfile} className="p-6 space-y-4">
-              {/* Profile Name */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider font-mono mb-1">
-                  Nome do Perfil <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="input-perfil-nome"
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Ex: Metalon 30x30, Perfil U 50x25..."
-                  className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-xs font-semibold focus:outline-none focus:bg-white transition ${
-                    formErrors.name ? 'border-red-500' : 'border-slate-200 focus:border-amber-500'
-                  }`}
-                />
-                {formErrors.name && <p className="text-[11px] text-red-500 mt-1">{formErrors.name}</p>}
+              {/* Profile Name & Category */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider font-mono mb-1">
+                    Nome do Perfil <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="input-perfil-nome"
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Ex: Metalon 30x30, Tubo Redondo 2"
+                    className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-xs font-semibold focus:outline-none focus:bg-white transition ${
+                      formErrors.name ? 'border-red-500' : 'border-slate-200 focus:border-amber-500'
+                    }`}
+                  />
+                  {formErrors.name && <p className="text-[11px] text-red-500 mt-1">{formErrors.name}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider font-mono mb-1">
+                    Categoria <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="select-perfil-categoria"
+                    value={formData.category}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value as ProfileCategory })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500 focus:bg-white transition cursor-pointer"
+                  >
+                    {ALL_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Dimensions Grid (Largura x Altura x Espessura) */}
@@ -717,7 +797,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                   <input
                     id="input-perfil-largura"
                     type="number"
-                    step="1"
+                    step="0.1"
                     min="1"
                     value={formData.widthMm}
                     onChange={(e) => setFormData({ ...formData, widthMm: e.target.value })}
@@ -733,7 +813,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                   <input
                     id="input-perfil-altura"
                     type="number"
-                    step="1"
+                    step="0.1"
                     min="1"
                     value={formData.heightMm}
                     onChange={(e) => setFormData({ ...formData, heightMm: e.target.value })}
@@ -749,8 +829,8 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                   <input
                     id="input-perfil-espessura"
                     type="number"
-                    step="0.1"
-                    min="0.5"
+                    step="0.05"
+                    min="0.2"
                     value={formData.wallThicknessMm}
                     onChange={(e) => setFormData({ ...formData, wallThicknessMm: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
@@ -759,32 +839,52 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                 </div>
               </div>
 
-              {/* Weight per Meter with Auto Calculator */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-[11px] font-bold text-slate-700 font-mono">
-                    Peso por Metro (kg/m) <span className="text-red-500">*</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleAutoCalculateWeight}
-                    className="text-[10px] font-mono text-amber-600 hover:text-amber-800 font-bold inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Zap className="w-3 h-3 text-amber-500" />
-                    <span>Calcular peso teórico (aço)</span>
-                  </button>
+              {/* Weight per Meter & Selling Unit */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700 font-mono">
+                      Peso Linear (kg/m) <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAutoCalculateWeight}
+                      className="text-[10px] font-mono text-amber-600 hover:text-amber-800 font-bold inline-flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Zap className="w-3 h-3 text-amber-500" />
+                      <span>Auto</span>
+                    </button>
+                  </div>
+                  <input
+                    id="input-perfil-peso"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.weightKgPerMeter}
+                    onChange={(e) => setFormData({ ...formData, weightKgPerMeter: e.target.value })}
+                    placeholder="Ex: 1.30"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
+                  />
+                  {formErrors.weightKgPerMeter && <p className="text-[10px] text-red-500 mt-0.5">{formErrors.weightKgPerMeter}</p>}
                 </div>
-                <input
-                  id="input-perfil-peso"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={formData.weightKgPerMeter}
-                  onChange={(e) => setFormData({ ...formData, weightKgPerMeter: e.target.value })}
-                  placeholder="Ex: 1.30"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
-                />
-                {formErrors.weightKgPerMeter && <p className="text-[10px] text-red-500 mt-0.5">{formErrors.weightKgPerMeter}</p>}
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 font-mono mb-1">
+                    Unidade de Venda
+                  </label>
+                  <select
+                    id="select-perfil-unidade"
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value as MaterialUnit })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500 cursor-pointer"
+                  >
+                    <option value="barra">Barra comercial</option>
+                    <option value="m">Metro linear (m)</option>
+                    <option value="kg">Quilograma (kg)</option>
+                    <option value="m2">Metro quadrado (m²)</option>
+                    <option value="chapa">Chapa / Placa</option>
+                  </select>
+                </div>
               </div>
 
               {/* Price Fields (Meter vs Bar) */}
@@ -824,7 +924,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                 </div>
               </div>
 
-              {/* Commercial Bar Length & Supplier */}
+              {/* Commercial Bar Length & Manufacturer */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 font-mono mb-1">
@@ -839,19 +939,18 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                     onChange={(e) => setFormData({ ...formData, defaultBarLengthMm: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
                   />
-                  <p className="text-[10px] text-slate-400 font-mono mt-0.5">Padrão nacional: 6000 mm (6 metros)</p>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 font-mono mb-1">
-                    Fornecedor (Opcional)
+                    Fabricante / Fornecedor
                   </label>
                   <input
-                    id="input-perfil-fornecedor"
+                    id="input-perfil-fabricante"
                     type="text"
-                    value={formData.supplier}
-                    onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
-                    placeholder="Ex: Gerdau, ArcelorMittal..."
+                    value={formData.manufacturer}
+                    onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
+                    placeholder="Ex: Gerdau, ArcelorMittal, CSN..."
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
                   />
                 </div>
@@ -867,7 +966,7 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                   rows={2}
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  placeholder="Ex: Usado em portões basculantes e travessas reforçadas..."
+                  placeholder="Ex: Usado para vigas e montantes principais..."
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-amber-500 resize-none"
                 />
               </div>
@@ -893,6 +992,75 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* VALIDATION / HOMOLOGATION REPORT MODAL */}
+      {validationReport && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="bg-emerald-500 text-slate-950 p-2 rounded-lg font-bold">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-display">
+                    Relatório de Homologação ET-020.1
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Validação do Repositório Universal de Materiais
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setValidationReport(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <p className="text-[10px] text-slate-500 font-mono uppercase font-bold">Status do Teste</p>
+                  <p className={`text-base font-bold font-mono ${validationReport.success ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {validationReport.success ? 'PASSED (100%)' : 'FAILED'}
+                  </p>
+                </div>
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <p className="text-[10px] text-slate-500 font-mono uppercase font-bold">Testes Executados</p>
+                  <p className="text-base font-bold font-mono text-slate-900">
+                    {validationReport.passedTests} / {validationReport.totalTests}
+                  </p>
+                </div>
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <p className="text-[10px] text-slate-500 font-mono uppercase font-bold">Categorias Cobertas</p>
+                  <p className="text-base font-bold font-mono text-blue-600">
+                    {validationReport.categoriesCovered} / 18
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-950 text-slate-200 font-mono text-xs p-4 rounded-xl max-h-72 overflow-y-auto space-y-1.5 border border-slate-800">
+                {validationReport.report.map((line, idx) => (
+                  <div key={idx} className="leading-relaxed">{line}</div>
+                ))}
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setValidationReport(null)}
+                  className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs hover:bg-slate-800 transition cursor-pointer"
+                >
+                  Fechar Relatório
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -945,3 +1113,4 @@ export const MaterialsLibraryModule: React.FC<MaterialsLibraryModuleProps> = () 
     </div>
   );
 };
+
