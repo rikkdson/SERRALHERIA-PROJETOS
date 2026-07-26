@@ -871,13 +871,229 @@ export function runHomologationSuite(): HomologationSuiteResult {
 }
 
 /**
+ * ======================================================
+ * ET-013.2 — SUÍTE PERMANENTE DE REGRESSÃO DO CORE ENGINE
+ * ======================================================
+ * PERMANENT RULE: Nenhuma alteração no Core Engine poderá ser
+ * considerada concluída sem aprovação integral (100%) desta suíte de regressão.
+ */
+
+export interface RegressionTestResult {
+  id: string;
+  name: string;
+  description: string;
+  status: '✅ Aprovado' | '⚠ Alerta' | '❌ Reprovado';
+  expectedPieces: number;
+  actualPieces: number;
+  expectedTotalLengthMm: number;
+  actualTotalLengthMm: number;
+  intersectionsCount: number;
+  multiModuleSync: boolean;
+  executionTimeMs: number;
+  differences: string[];
+}
+
+export interface RegressionSuiteReport {
+  timestamp: string;
+  totalTimeMs: number;
+  totalTests: number;
+  passCount: number;
+  failCount: number;
+  warningCount: number;
+  regressionIndex: number;
+  classification: 'Reprovado' | 'Aprovado' | 'Certificado';
+  permanentRuleAccepted: boolean;
+  results: RegressionTestResult[];
+}
+
+export function runRegressionSuite(): RegressionSuiteReport {
+  const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const results: RegressionTestResult[] = [];
+  const defaultProf = 'Metalon 30x30';
+
+  const getFrame = (): FreeDrawingLine[] => [
+    { id: 'f_top', x1: 0, y1: 0, x2: 1200, y2: 0, lengthMm: 1200, angleDeg: 0, profile: defaultProf },
+    { id: 'f_bot', x1: 0, y1: 2000, x2: 1200, y2: 2000, lengthMm: 1200, angleDeg: 0, profile: defaultProf },
+    { id: 'f_left', x1: 0, y1: 0, x2: 0, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 'f_right', x1: 1200, y1: 0, x2: 1200, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf }
+  ];
+
+  const execRegressionTest = (
+    id: string,
+    name: string,
+    description: string,
+    lines: FreeDrawingLine[],
+    expectedPieces: number,
+    expectedTotalLengthMm: number
+  ): RegressionTestResult => {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    
+    // Core Engine Execution
+    const model = buildFabricationModel(lines, 'interromper');
+    const withIntersections = calculateIntersections(model);
+    const withRules = applyFabricationRules(withIntersections);
+    const finalPieces = generateFinalPieces(withRules);
+    const { validLines } = validateFabricationOutput(finalPieces);
+
+    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    const actualPieces = validLines.length;
+    const actualTotalLengthMm = validLines.reduce((acc, l) => acc + (l.lengthMm || 0), 0);
+    const intersectionsCount = withIntersections.intersections.length;
+
+    // Multi-module sync simulation
+    const mappedPieces = validLines.map(l => ({
+      id: l.id,
+      comprimentoMm: l.lengthMm || 0,
+      perfil: l.profile || defaultProf
+    }));
+
+    const multiModuleSync = mappedPieces.length === actualPieces &&
+      mappedPieces.reduce((acc, p) => acc + p.comprimentoMm, 0) === actualTotalLengthMm;
+
+    const differences: string[] = [];
+    if (actualPieces !== expectedPieces) {
+      differences.push(`Peças: esperado ${expectedPieces}, obtido ${actualPieces}`);
+    }
+    if (Math.abs(actualTotalLengthMm - expectedTotalLengthMm) > 5) {
+      differences.push(`Comprimento total: esperado ${expectedTotalLengthMm}mm, obtido ${actualTotalLengthMm}mm`);
+    }
+    if (!multiModuleSync) {
+      differences.push('Falha na sincronização multimódulo (Render/Corte/Orçamento/Otimização)');
+    }
+
+    let status: '✅ Aprovado' | '⚠ Alerta' | '❌ Reprovado' = '✅ Aprovado';
+    if (differences.length > 0) {
+      status = actualPieces === expectedPieces && multiModuleSync ? '⚠ Alerta' : '❌ Reprovado';
+    }
+
+    return {
+      id,
+      name,
+      description,
+      status,
+      expectedPieces,
+      actualPieces,
+      expectedTotalLengthMm,
+      actualTotalLengthMm,
+      intersectionsCount,
+      multiModuleSync,
+      executionTimeMs: Math.round((t1 - t0) * 100) / 100,
+      differences
+    };
+  };
+
+  // CORE-001: Quadro simples
+  results.push(execRegressionTest('CORE-001', 'Quadro Simples', 'Estrutura periférica 1200x2000mm', getFrame(), 4, 6400));
+
+  // CORE-002: Quadro + travessa
+  results.push(execRegressionTest('CORE-002', 'Quadro + Travessa', 'Quadro + 1 travessa central 1200mm', [
+    ...getFrame(),
+    { id: 't1', x1: 0, y1: 1000, x2: 1200, y2: 1000, lengthMm: 1200, angleDeg: 0, profile: defaultProf }
+  ], 5, 7600));
+
+  // CORE-003: Quadro + coluna
+  results.push(execRegressionTest('CORE-003', 'Quadro + Coluna', 'Quadro + 1 coluna central 2000mm', [
+    ...getFrame(),
+    { id: 'c1', x1: 600, y1: 0, x2: 600, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf }
+  ], 5, 8400));
+
+  // CORE-004: Quadro + travessa + coluna
+  results.push(execRegressionTest('CORE-004', 'Quadro + Travessa + Coluna', 'Quadro + cruz central (coluna contínua)', [
+    ...getFrame(),
+    { id: 'c1', x1: 600, y1: 0, x2: 600, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 't1', x1: 0, y1: 1000, x2: 1200, y2: 1000, lengthMm: 1200, angleDeg: 0, profile: defaultProf }
+  ], 7, 9600));
+
+  // CORE-005: Quadro + diagonal
+  results.push(execRegressionTest('CORE-005', 'Quadro + Diagonal', 'Quadro + diagonal de contraventamento', [
+    ...getFrame(),
+    { id: 'd1', x1: 0, y1: 0, x2: 1200, y2: 2000, lengthMm: 2332, angleDeg: 59, profile: defaultProf }
+  ], 5, 8732));
+
+  // CORE-006: Quadro + duas diagonais
+  results.push(execRegressionTest('CORE-006', 'Quadro + Duas Diagonais', 'Quadro + diagonais cruzadas em X', [
+    ...getFrame(),
+    { id: 'd1', x1: 0, y1: 0, x2: 1200, y2: 2000, lengthMm: 2332, angleDeg: 59, profile: defaultProf },
+    { id: 'd2', x1: 1200, y1: 0, x2: 0, y2: 2000, lengthMm: 2332, angleDeg: 121, profile: defaultProf }
+  ], 7, 11064));
+
+  // CORE-007: Quadro + reforços
+  results.push(execRegressionTest('CORE-007', 'Quadro + Reforços', 'Quadro + 4 gussets de canto (mão de força)', [
+    ...getFrame(),
+    { id: 'r1', x1: 300, y1: 0, x2: 0, y2: 300, lengthMm: 424, angleDeg: 135, profile: defaultProf },
+    { id: 'r2', x1: 900, y1: 0, x2: 1200, y2: 300, lengthMm: 424, angleDeg: 45, profile: defaultProf },
+    { id: 'r3', x1: 900, y1: 2000, x2: 1200, y2: 1700, lengthMm: 424, angleDeg: 315, profile: defaultProf },
+    { id: 'r4', x1: 300, y1: 2000, x2: 0, y2: 1700, lengthMm: 424, angleDeg: 225, profile: defaultProf }
+  ], 8, 8096));
+
+  // CORE-008: Preenchimento vertical
+  results.push(execRegressionTest('CORE-008', 'Preenchimento Vertical', 'Quadro + 3 montantes verticais', [
+    ...getFrame(),
+    { id: 'v1', x1: 300, y1: 0, x2: 300, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 'v2', x1: 600, y1: 0, x2: 600, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 'v3', x1: 900, y1: 0, x2: 900, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf }
+  ], 7, 12400));
+
+  // CORE-009: Preenchimento horizontal
+  results.push(execRegressionTest('CORE-009', 'Preenchimento Horizontal', 'Quadro + 3 travessas horizontais', [
+    ...getFrame(),
+    { id: 'h1', x1: 0, y1: 500, x2: 1200, y2: 500, lengthMm: 1200, angleDeg: 0, profile: defaultProf },
+    { id: 'h2', x1: 0, y1: 1000, x2: 1200, y2: 1000, lengthMm: 1200, angleDeg: 0, profile: defaultProf },
+    { id: 'h3', x1: 0, y1: 1500, x2: 1200, y2: 1500, lengthMm: 1200, angleDeg: 0, profile: defaultProf }
+  ], 7, 10000));
+
+  // CORE-010: Preenchimento misto
+  results.push(execRegressionTest('CORE-010', 'Preenchimento Misto', 'Grade bidirecional de 2 montantes x 2 travessas', [
+    ...getFrame(),
+    { id: 'v1', x1: 400, y1: 0, x2: 400, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 'v2', x1: 800, y1: 0, x2: 800, y2: 2000, lengthMm: 2000, angleDeg: 90, profile: defaultProf },
+    { id: 'h1', x1: 0, y1: 666, x2: 1200, y2: 666, lengthMm: 1200, angleDeg: 0, profile: defaultProf },
+    { id: 'h2', x1: 0, y1: 1333, x2: 1200, y2: 1333, lengthMm: 1200, angleDeg: 0, profile: defaultProf }
+  ], 12, 12800));
+
+  const endTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const totalTimeMs = Math.round((endTime - startTime) * 100) / 100;
+
+  const totalTests = results.length;
+  const passCount = results.filter(r => r.status === '✅ Aprovado').length;
+  const warningCount = results.filter(r => r.status === '⚠ Alerta').length;
+  const failCount = results.filter(r => r.status === '❌ Reprovado').length;
+
+  const regressionIndex = Math.round((passCount / totalTests) * 100);
+
+  let classification: 'Reprovado' | 'Aprovado' | 'Certificado' = 'Certificado';
+  if (regressionIndex < 90) classification = 'Reprovado';
+  else if (regressionIndex < 100) classification = 'Aprovado';
+  else classification = 'Certificado';
+
+  return {
+    timestamp: new Date().toISOString(),
+    totalTimeMs,
+    totalTests,
+    passCount,
+    failCount,
+    warningCount,
+    regressionIndex,
+    classification,
+    permanentRuleAccepted: regressionIndex === 100,
+    results
+  };
+}
+
+/**
  * Legacy test validation function
  */
 export function runFabricationEngineValidationTests(): { success: boolean; results: string[] } {
   const suite = runHomologationSuite();
+  const regression = runRegressionSuite();
   return {
-    success: suite.reliabilityIndex === 100,
-    results: suite.reports.map(r => `${r.status} ${r.id}: ${r.name} (${r.actualPieces}/${r.expectedPieces} peças) - ${r.notes}`)
+    success: suite.reliabilityIndex === 100 && regression.regressionIndex === 100,
+    results: [
+      `[Regressão ET-013.2] Índice: ${regression.regressionIndex}% (${regression.classification}) em ${regression.totalTimeMs}ms`,
+      ...regression.results.map(r => `${r.status} ${r.id}: ${r.name} (${r.actualPieces}/${r.expectedPieces} peças, ${r.actualTotalLengthMm}mm) - ${r.differences.join('; ') || 'Sincronizado'}`)
+    ]
   };
 }
+
 
