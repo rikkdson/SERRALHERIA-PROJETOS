@@ -908,4 +908,65 @@ export interface FreeDrawingData {
   updatedAt?: string;
 }
 
+// ==========================================
+// ET-021.1: BIBLIOTECA INTELIGENTE DE LIGAÇÕES TYPES
+// ==========================================
+
+export type StructuralConnectionType =
+  | 'canto_90'
+  | 'meia_esquadria_45'
+  | 'topo_topo'
+  | 'ligacao_t'
+  | 'ligacao_cruz'
+  | 'tubo_continuo_interrompido'
+  | 'emenda_interna'
+  | 'emenda_luva'
+  | 'sobreposicao'
+  | 'reforco_canto'
+  | 'reforco_central'
+  | 'ligacao_soldada'
+  | 'ligacao_aparafusada';
+
+export type ConnectionCategory = 'soldada' | 'aparafusada' | 'mista' | 'encaixe';
+
+export interface WeldSpecs {
+  weldType: 'solda_mig_mag' | 'solda_mma_eletrodo' | 'solda_tig' | 'solda_ponteado';
+  gapMm: number;               // Fresta para penetração da solda (ex: 1.5mm)
+  bevelAngleDegrees?: number;  // Bisel de preparação (ex: 30°)
+  passCount?: number;          // Número de passes
+}
+
+export interface BoltSpecs {
+  boltDiameter: string;        // ex: "M8", "M10", "3/8\""
+  boltType: 'sextavado' | 'allen' | 'frances' | 'chumbador';
+  holeCount: number;           // Furos por união
+  plateThicknessMm: number;    // Espessura da chapa de ligação (ex: 3mm)
+}
+
+export interface ReinforcementSpecs {
+  reinforcementType: 'mao_de_forca' | 'cantoneira_reforco' | 'chapa_gusset' | 'luva_interna';
+  thicknessMm: number;
+  lengthMm: number;
+}
+
+export interface StructuralConnection {
+  id: string;
+  name: string;
+  type: StructuralConnectionType;
+  category: ConnectionCategory;
+  description: string;
+  isStandard: boolean;          // Protegida contra exclusão se true
+  isArchived: boolean;         // Indicador de arquivamento
+  compatibleProfiles: string[];// ex: ["Metalon Quadrado", "Tubos Redondos", "Cantoneiras", "Todos"]
+  deductionMm: number;         // Desconto de fabricação / folga (em mm)
+  allowCutAngleOffset: boolean;// Permite compensação angular
+  weldSpecs?: WeldSpecs;
+  boltSpecs?: BoltSpecs;
+  reinforcementSpecs?: ReinforcementSpecs;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+
 

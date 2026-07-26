@@ -58,6 +58,7 @@ import { ProjectBlueprint } from './components/ProjectBlueprint';
 import { CutListModule } from './components/CutListModule';
 import { BarOptimizationModule } from './components/BarOptimizationModule';
 import { MaterialsLibraryModule } from './components/MaterialsLibraryModule';
+import { ConnectionsLibraryModule } from './components/ConnectionsLibraryModule';
 import { BudgetModule } from './components/BudgetModule';
 import { PriceCenterModule } from './components/PriceCenterModule';
 import { GeometricEngineModule } from './components/GeometricEngineModule';
@@ -1792,6 +1793,20 @@ export default function App() {
               className="flex flex-col gap-6 w-full"
             >
               <MaterialsLibraryModule />
+            </motion.div>
+          )}
+
+          {/* TAB 3B: BIBLIOTECA INTELIGENTE DE LIGAÇÕES (ET-021.1) */}
+          {activeTab === 'biblioteca-ligacoes' && (
+            <motion.div
+              key="connections-library"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col gap-6 w-full"
+            >
+              <ConnectionsLibraryModule />
             </motion.div>
           )}
 

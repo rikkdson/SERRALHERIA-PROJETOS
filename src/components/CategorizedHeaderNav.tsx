@@ -19,7 +19,8 @@ import {
   SlidersHorizontal,
   X,
   Sparkles,
-  Menu
+  Menu,
+  Link2
 } from 'lucide-react';
 
 export type MainCategoryTab = 
@@ -175,6 +176,23 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
             <span>Materiais</span>
           </button>
 
+          {/* 🔗 6. LIGAÇÕES */}
+          <button
+            type="button"
+            onClick={() => {
+              onSelectTab('biblioteca-ligacoes');
+              closeDropdowns();
+            }}
+            className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'biblioteca-ligacoes'
+                ? 'bg-amber-500 text-slate-950 shadow-sm font-extrabold'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Link2 className="w-4 h-4" />
+            <span>Ligações</span>
+          </button>
+
         </nav>
 
         {/* Quick FAB Action Button Header (All Screens) */}
@@ -314,6 +332,21 @@ export const CategorizedHeaderNav: React.FC<CategorizedHeaderNavProps> = ({
                 <div>
                   <div>📦 Biblioteca de Materiais</div>
                   <div className="text-xs font-normal text-slate-400">Tubos, metalons e cantoneiras</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectTab('biblioteca-ligacoes');
+                  setIsMobileDrawerOpen(false);
+                }}
+                className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/50 flex items-center gap-3 font-bold text-sm text-left"
+              >
+                <span className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl">🔗</span>
+                <div>
+                  <div>🔗 Biblioteca de Ligações</div>
+                  <div className="text-xs font-normal text-slate-400">Uniões, cantos 90°, soldas e parafusos</div>
                 </div>
               </button>
             </div>
