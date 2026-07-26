@@ -963,10 +963,112 @@ export interface StructuralConnection {
   weldSpecs?: WeldSpecs;
   boltSpecs?: BoltSpecs;
   reinforcementSpecs?: ReinforcementSpecs;
+  parametricRules?: ParametricConnectionRules;
   notes: string;
   createdAt: string;
   updatedAt: string;
 }
+
+// ==========================================
+// ET-021.2: MOTOR PARAMÉTRICO DE LIGAÇÕES TYPES
+// ==========================================
+
+export type ContinuousBarRole = 'passante' | 'principal' | 'suporte_fixo' | 'livre';
+export type InterruptedBarRole = 'encostado' | 'secundario' | 'desmontavel' | 'livre';
+export type JunctionType = 'perpendicular' | 'angular' | 'topo' | 'sobreposta' | 'cruzada' | 'coaxial';
+
+export interface GeometricRules {
+  continuousBarRole: ContinuousBarRole;
+  interruptedBarRole: InterruptedBarRole;
+  junctionType: JunctionType;
+  minAngleDegrees: number;
+  maxAngleDegrees: number;
+  angleToleranceDegrees: number;
+  minEngagementLengthMm: number;
+  partGapMm: number;
+}
+
+export type CutType = 'corte_reto' | 'corte_45' | 'boca_de_lobo' | 'corte_especial' | 'entalhe';
+export type EdgePreparation = 'nenhuma' | 'bisel_simples' | 'bisel_duplo' | 'esmerilhado' | 'escareado';
+
+export interface FabricationRules {
+  cutType: CutType;
+  edgePreparation: EdgePreparation;
+  weldGapMm: number;
+  paintClearanceMm: number;
+  needsBevel: boolean;
+  needsFinishing: boolean;
+}
+
+export type FasteningType = 'soldada' | 'parafusada' | 'rebitada' | 'mista';
+
+export interface FasteningRules {
+  fasteningType: FasteningType;
+  minFastenerCount: number;
+  recommendedDiameter: string;
+  minHoleSpacingMm: number;
+  minEdgeDistanceMm: number;
+}
+
+export type ReinforcementRequirement = 'obrigatorio' | 'opcional' | 'nao_aplicavel';
+export type ReinforcementType = 'chapa_gusset' | 'mao_de_forca' | 'cantoneira' | 'luva_interna' | 'chapa_base';
+
+export interface ReinforcementRules {
+  reinforcementRequirement: ReinforcementRequirement;
+  reinforcementType: ReinforcementType;
+  minThicknessMm: number;
+  minDimensionsMm: { width: number; height: number; length?: number };
+}
+
+export interface ParametricConnectionRules {
+  connectionId: string;
+  geometricRules: GeometricRules;
+  fabricationRules: FabricationRules;
+  fasteningRules: FasteningRules;
+  reinforcementRules: ReinforcementRules;
+  updatedAt: string;
+}
+
+// API Paramétrica Outputs (ET-021.2)
+export interface ProcessRecommendation {
+  connectionId: string;
+  connectionName: string;
+  category: ConnectionCategory;
+  primaryProcess: string;
+  recommendedEquipment: string[];
+  edgePrepInstruction: string;
+  finishingLevel: string;
+  estimatedSetupTimeMin: number;
+}
+
+export interface ReinforcementRequirementResult {
+  connectionId: string;
+  connectionName: string;
+  requirement: ReinforcementRequirement;
+  type: string;
+  minThicknessMm: number;
+  recommendedPlateSpecs: string;
+  structuralReason: string;
+}
+
+export interface GeometryValidationResult {
+  isValid: boolean;
+  connectionId: string;
+  connectionName: string;
+  checkedAngle: number;
+  checkedGapMm: number;
+  issues: string[];
+  recommendations: string[];
+}
+
+export interface ParametricTestResult {
+  testId: string;
+  name: string;
+  passed: boolean;
+  message: string;
+  details?: string;
+}
+
 
 
 

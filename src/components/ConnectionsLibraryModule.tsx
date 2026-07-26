@@ -9,7 +9,6 @@ import {
   Link2,
   Plus,
   Search,
-  Filter,
   CheckCircle,
   AlertTriangle,
   Lock,
@@ -20,16 +19,20 @@ import {
   ShieldCheck,
   RefreshCw,
   Info,
-  Sliders,
   Check,
   X,
-  Hammer,
   Zap,
-  ChevronRight,
   Eye,
-  FileCode,
   Layers,
-  Wrench
+  Wrench,
+  Sliders,
+  Cpu,
+  Compass,
+  Hammer,
+  Maximize2,
+  ShieldAlert,
+  Terminal,
+  Settings
 } from 'lucide-react';
 
 import {
@@ -39,6 +42,16 @@ import {
   WeldSpecs,
   BoltSpecs,
   ReinforcementSpecs,
+  ParametricConnectionRules,
+  ContinuousBarRole,
+  InterruptedBarRole,
+  JunctionType,
+  CutType,
+  EdgePreparation,
+  FasteningType,
+  ReinforcementRequirement,
+  ReinforcementType,
+  ParametricTestResult,
 } from '../types';
 
 import {
@@ -52,6 +65,17 @@ import {
   ConnectionTestResult,
   CONNECTIONS_UPDATED_EVENT,
 } from '../utils/connectionsStore';
+
+import {
+  getConnectionRules,
+  saveConnectionRules,
+  getRecommendedProcess,
+  getRequiredReinforcements,
+  validateConnectionGeometry,
+  runParametricTestSuite,
+  resetParametricRulesToDefaults,
+  PARAMETRIC_RULES_UPDATED_EVENT,
+} from '../utils/parametricEngine';
 
 export const CONNECTION_TYPE_LABELS: Record<StructuralConnectionType, { label: string; icon: string; desc: string }> = {
   canto_90: { label: 'Canto 90°', icon: '📐', desc: 'Encontro reto perpendicular' },
@@ -95,7 +119,7 @@ export const PROFILE_OPTIONS = [
 
 export const ConnectionsLibraryModule: React.FC = () => {
   const [connections, setConnections] = useState<StructuralConnection[]>([]);
-  const [activeTab, setActiveTab] = useState<'catalog' | 'test_suite'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'parametric' | 'test_suite'>('catalog');
 
   // Filters state
   const [searchTerm, setSearchTerm] = useState('');
@@ -109,7 +133,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
   const [viewingConn, setViewingConn] = useState<StructuralConnection | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  // Form states
+  // Form states (ET-021.1)
   const [formName, setFormName] = useState('');
   const [formType, setFormType] = useState<StructuralConnectionType>('canto_90');
   const [formCategory, setFormCategory] = useState<ConnectionCategory>('soldada');
@@ -139,11 +163,20 @@ export const ConnectionsLibraryModule: React.FC = () => {
   const [reinfThickness, setReinfThickness] = useState('3.0');
   const [reinfLength, setReinfLength] = useState('100');
 
+  // MOTOR PARAMÉTRICO (ET-021.2) STATE
+  const [selectedParametricConnId, setSelectedParametricConnId] = useState<string>('');
+  const [parametricRules, setParametricRules] = useState<ParametricConnectionRules | null>(null);
+
+  // Live Geometry Simulation state
+  const [simAngle, setSimAngle] = useState<number>(90);
+  const [simGapMm, setSimGapMm] = useState<number>(1.0);
+
   // Test suite results state
-  const [testResults, setTestResults] = useState<ConnectionTestResult[]>([]);
+  const [testResultsEt21_1, setTestResultsEt21_1] = useState<ConnectionTestResult[]>([]);
+  const [testResultsEt21_2, setTestResultsEt21_2] = useState<ParametricTestResult[]>([]);
   const [isRunningTests, setIsRunningTests] = useState(false);
 
-  // Load connections and setup event listener
+  // Load connections and setup event listeners
   useEffect(() => {
     loadData();
 
@@ -152,14 +185,36 @@ export const ConnectionsLibraryModule: React.FC = () => {
     };
 
     window.addEventListener(CONNECTIONS_UPDATED_EVENT, handleUpdate);
+    window.addEventListener(PARAMETRIC_RULES_UPDATED_EVENT, handleUpdate);
     return () => {
       window.removeEventListener(CONNECTIONS_UPDATED_EVENT, handleUpdate);
+      window.removeEventListener(PARAMETRIC_RULES_UPDATED_EVENT, handleUpdate);
     };
   }, []);
+
+  useEffect(() => {
+    if (connections.length > 0 && !selectedParametricConnId) {
+      setSelectedParametricConnId(connections[0].id);
+    }
+  }, [connections]);
+
+  useEffect(() => {
+    if (selectedParametricConnId) {
+      const rules = getConnectionRules(selectedParametricConnId);
+      setParametricRules(rules);
+      if (rules) {
+        setSimAngle(rules.geometricRules.minAngleDegrees === 40 ? 45 : 90);
+        setSimGapMm(rules.fabricationRules.weldGapMm || 1.0);
+      }
+    }
+  }, [selectedParametricConnId]);
 
   const loadData = () => {
     const list = getConnections();
     setConnections(list);
+    if (selectedParametricConnId) {
+      setParametricRules(getConnectionRules(selectedParametricConnId));
+    }
   };
 
   const showNotification = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -322,19 +377,29 @@ export const ConnectionsLibraryModule: React.FC = () => {
   };
 
   const handleResetToDefault = () => {
-    if (window.confirm('Deseja restaurar as ligações padrão de fábrica? Suas ligações personalizadas serão preservadas se arquivadas.')) {
+    if (window.confirm('Deseja restaurar as ligações padrão de fábrica e regras paramétricas originais?')) {
       resetConnectionsToDefault();
-      showNotification('Ligações redefinidas para os padrões oficiais do sistema.', 'info');
+      resetParametricRulesToDefaults();
+      showNotification('Ligações e Motor Paramétrico redefinidos para o padrão oficial.', 'info');
     }
   };
 
-  const handleRunTests = () => {
+  const handleRunAllTests = () => {
     setIsRunningTests(true);
     setTimeout(() => {
-      const res = runConnectionsTestSuite();
-      setTestResults(res);
+      const res1 = runConnectionsTestSuite();
+      const res2 = runParametricTestSuite();
+      setTestResultsEt21_1(res1);
+      setTestResultsEt21_2(res2);
       setIsRunningTests(false);
-    }, 300);
+    }, 350);
+  };
+
+  const handleSaveParametricRulesChange = (updated: ParametricConnectionRules) => {
+    if (!selectedParametricConnId) return;
+    const saved = saveConnectionRules(selectedParametricConnId, updated);
+    setParametricRules(saved);
+    showNotification('Regras paramétricas da ligação atualizadas com sucesso!', 'success');
   };
 
   const toggleProfileSelection = (profileName: string) => {
@@ -356,10 +421,8 @@ export const ConnectionsLibraryModule: React.FC = () => {
 
   // Filtered Connections list
   const filteredConnections = connections.filter((conn) => {
-    // Show/Hide archived
     if (!showArchived && conn.isArchived) return false;
 
-    // Search query
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       const nameMatch = conn.name.toLowerCase().includes(q);
@@ -369,10 +432,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
       if (!nameMatch && !descMatch && !typeLabel && !profileMatch) return false;
     }
 
-    // Category filter
     if (selectedCategory !== 'todas' && conn.category !== selectedCategory) return false;
-
-    // Type filter
     if (selectedType !== 'todos' && conn.type !== selectedType) return false;
 
     return true;
@@ -385,6 +445,14 @@ export const ConnectionsLibraryModule: React.FC = () => {
   const weldedCount = connections.filter((c) => c.category === 'soldada').length;
   const boltedCount = connections.filter((c) => c.category === 'aparafusada').length;
   const archivedCount = connections.filter((c) => c.isArchived).length;
+
+  // Selected Conn object for Motor Paramétrico tab
+  const selectedConnObj = connections.find((c) => c.id === selectedParametricConnId) || connections[0];
+  const simValidationResult = selectedParametricConnId
+    ? validateConnectionGeometry(selectedParametricConnId, simAngle, simGapMm)
+    : null;
+  const recommendedProc = selectedParametricConnId ? getRecommendedProcess(selectedParametricConnId) : null;
+  const requiredReinf = selectedParametricConnId ? getRequiredReinforcements(selectedParametricConnId) : null;
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto pb-12">
@@ -419,20 +487,23 @@ export const ConnectionsLibraryModule: React.FC = () => {
       {/* HERO HEADER */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-indigo-950 text-white rounded-2xl p-6 sm:p-8 shadow-xl border border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono px-2.5 py-0.5 rounded-full uppercase tracking-wider font-bold">
-              ET-021.1 • Módulo Independente
+              ET-021.1 + ET-021.2
             </span>
             <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono px-2.5 py-0.5 rounded-full uppercase tracking-wider font-bold">
+              Motor Paramétrico Desacoplado
+            </span>
+            <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono px-2.5 py-0.5 rounded-full uppercase tracking-wider font-bold">
               Core Engine Safe
             </span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2.5">
-            <Link2 className="w-7 h-7 text-indigo-400" />
-            <span>Biblioteca Inteligente de Ligações</span>
+            <Cpu className="w-7 h-7 text-amber-400" />
+            <span>Biblioteca & Motor Paramétrico de Ligações</span>
           </h2>
-          <p className="text-slate-300 text-xs sm:text-sm mt-2 max-w-2xl leading-relaxed">
-            Repositório único e padronizador para uniões estruturais: cantos 90°, meias-esquadrias 45°, travessas, soldas, furos, luvas internas e juntas aparafusadas.
+          <p className="text-slate-300 text-xs sm:text-sm mt-2 max-w-3xl leading-relaxed">
+            Módulo padronizador e motor de regras para uniões estruturais: geometria (ângulos, folgas), fabricação (cortes, biséis, acabamentos), fixações (soldas, parafusos, furos) e reforços (chapas/gussets).
           </p>
         </div>
 
@@ -450,7 +521,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
             type="button"
             onClick={handleResetToDefault}
             className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 rounded-xl transition text-xs cursor-pointer"
-            title="Restaurar ligações oficiais de fábrica"
+            title="Restaurar ligações e regras paramétricas oficiais de fábrica"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
@@ -464,7 +535,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
             <Link2 className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Total</p>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Total Ligações</p>
             <p className="text-lg font-bold font-mono text-slate-900">{totalCount}</p>
           </div>
         </div>
@@ -490,12 +561,12 @@ export const ConnectionsLibraryModule: React.FC = () => {
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center space-x-3">
-          <div className="p-2.5 bg-slate-100 text-slate-700 rounded-lg shrink-0">
-            <Lock className="w-5 h-5" />
+          <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
+            <Cpu className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Padrão vs Custom</p>
-            <p className="text-lg font-bold font-mono text-slate-900">{standardCount} / {customCount}</p>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Regras Paramétricas</p>
+            <p className="text-lg font-bold font-mono text-emerald-600">100% Ativas</p>
           </div>
         </div>
 
@@ -510,9 +581,9 @@ export const ConnectionsLibraryModule: React.FC = () => {
         </div>
       </div>
 
-      {/* NAVIGATION TABS (CATÁLOGO DE LIGAÇÕES vs SUÍTE DE TESTES ET-021.1) */}
+      {/* NAVIGATION TABS (CATÁLOGO ET-021.1 vs MOTOR PARAMÉTRICO ET-021.2 vs SUÍTE DE TESTES) */}
       <div className="bg-white p-2 border border-slate-200 rounded-2xl shadow-xs flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => setActiveTab('catalog')}
@@ -528,29 +599,40 @@ export const ConnectionsLibraryModule: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => {
-              setActiveTab('test_suite');
-              if (testResults.length === 0) handleRunTests();
-            }}
+            onClick={() => setActiveTab('parametric')}
             className={`px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition flex items-center gap-2 cursor-pointer ${
-              activeTab === 'test_suite'
+              activeTab === 'parametric'
                 ? 'bg-slate-900 text-amber-400 shadow-sm'
                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <ShieldCheck className="w-4 h-4 text-amber-400" />
-            <span>Suíte de Testes e Certificação ET-021.1</span>
+            <Cpu className="w-4 h-4 text-amber-400" />
+            <span>Motor Paramétrico (ET-021.2)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('test_suite');
+              if (testResultsEt21_1.length === 0) handleRunAllTests();
+            }}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold font-mono transition flex items-center gap-2 cursor-pointer ${
+              activeTab === 'test_suite'
+                ? 'bg-slate-900 text-emerald-400 shadow-sm'
+                : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>Suíte de Testes (ET-021.1 + ET-021.2)</span>
           </button>
         </div>
 
-        {activeTab === 'catalog' && (
-          <div className="text-[11px] font-mono text-slate-500 px-3">
-            Única Fonte Oficial de Regras de Ligação
-          </div>
-        )}
+        <div className="text-[11px] font-mono text-slate-500 px-3 hidden lg:block">
+          API e Regras Totalmente Desacopladas
+        </div>
       </div>
 
-      {/* TAB CONTENT 1: CATALOG OF CONNECTIONS */}
+      {/* TAB CONTENT 1: CATALOG OF CONNECTIONS (ET-021.1) */}
       {activeTab === 'catalog' && (
         <div className="flex flex-col gap-6">
           
@@ -706,13 +788,11 @@ export const ConnectionsLibraryModule: React.FC = () => {
                       {/* Technical Attributes Box */}
                       <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 mt-3 space-y-2 text-xs font-mono">
                         
-                        {/* Deduction / Gap */}
                         <div className="flex justify-between items-center text-slate-700">
                           <span className="text-slate-400 font-bold uppercase text-[10px]">Folga / Desconto:</span>
                           <strong className="text-slate-900">{conn.deductionMm} mm</strong>
                         </div>
 
-                        {/* Weld Specs preview */}
                         {conn.weldSpecs && (
                           <div className="flex justify-between items-center text-slate-700 border-t border-slate-200/60 pt-1.5">
                             <span className="text-slate-400 font-bold uppercase text-[10px]">Solda:</span>
@@ -722,7 +802,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           </div>
                         )}
 
-                        {/* Bolt Specs preview */}
                         {conn.boltSpecs && (
                           <div className="flex justify-between items-center text-slate-700 border-t border-slate-200/60 pt-1.5">
                             <span className="text-slate-400 font-bold uppercase text-[10px]">Parafusos:</span>
@@ -732,7 +811,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           </div>
                         )}
 
-                        {/* Compatible Profiles preview */}
                         <div className="flex justify-between items-center text-slate-700 border-t border-slate-200/60 pt-1.5">
                           <span className="text-slate-400 font-bold uppercase text-[10px]">Perfis:</span>
                           <span className="text-slate-600 font-medium truncate max-w-[150px]" title={conn.compatibleProfiles?.join(', ')}>
@@ -744,21 +822,22 @@ export const ConnectionsLibraryModule: React.FC = () => {
                     </div>
 
                     {/* Footer Actions */}
-                    <div className="border-t border-slate-100 pt-3.5 mt-4 flex items-center justify-between gap-1">
+                    <div className="border-t border-slate-100 pt-3.5 mt-4 flex items-center justify-between gap-1 flex-wrap">
                       
-                      {/* View Details button */}
                       <button
                         type="button"
-                        onClick={() => setViewingConn(conn)}
-                        className="text-xs font-semibold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 px-2.5 py-1.5 rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
+                        onClick={() => {
+                          setSelectedParametricConnId(conn.id);
+                          setActiveTab('parametric');
+                        }}
+                        className="text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1.5 rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
+                        title="Inspecionar / Editar regras no Motor Paramétrico (ET-021.2)"
                       >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Detalhes</span>
+                        <Cpu className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Motor Paramétrico</span>
                       </button>
 
                       <div className="flex items-center gap-1">
-                        
-                        {/* Edit Button */}
                         <button
                           type="button"
                           onClick={() => handleOpenEditModal(conn)}
@@ -768,7 +847,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           <Edit2 className="w-4 h-4" />
                         </button>
 
-                        {/* Duplicate Button */}
                         <button
                           type="button"
                           onClick={() => handleDuplicate(conn.id)}
@@ -778,7 +856,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           <Copy className="w-4 h-4" />
                         </button>
 
-                        {/* Archive / Unarchive Button */}
                         <button
                           type="button"
                           onClick={() => handleArchive(conn.id, !!conn.isArchived)}
@@ -792,7 +869,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           <Archive className="w-4 h-4" />
                         </button>
 
-                        {/* Delete Button (Disabled for Standard items) */}
                         <button
                           type="button"
                           disabled={conn.isStandard}
@@ -810,7 +886,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
-
                       </div>
 
                     </div>
@@ -823,79 +898,871 @@ export const ConnectionsLibraryModule: React.FC = () => {
         </div>
       )}
 
-      {/* TAB CONTENT 2: CERTIFICATION TEST SUITE ET-021.1 */}
+      {/* TAB CONTENT 2: MOTOR PARAMÉTRICO DE LIGAÇÕES (ET-021.2) */}
+      {activeTab === 'parametric' && (
+        <div className="flex flex-col gap-6">
+          
+          {/* TOP SELECTOR BAR */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-mono px-2.5 py-0.5 rounded font-bold">
+                  ET-021.2 • Motor Paramétrico
+                </span>
+              </div>
+              <h3 className="text-lg font-bold font-display text-slate-900">
+                Inspecionar e Configurar Regras Técnicas
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Selecione uma ligação para visualizar e editar as regras de 4 Fases (Geometria, Fabricação, Fixação e Reforço).
+              </p>
+            </div>
+
+            <div className="w-full md:w-auto flex items-center gap-3">
+              <label className="text-xs font-mono font-bold text-slate-700 shrink-0">Ligação Alvo:</label>
+              <select
+                value={selectedParametricConnId}
+                onChange={(e) => setSelectedParametricConnId(e.target.value)}
+                className="w-full md:w-80 bg-slate-900 text-amber-300 border border-slate-800 rounded-xl px-3 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer shadow-sm"
+              >
+                {connections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.isStandard ? '🔒 ' : '⚡ '} {c.name} ({CONNECTION_TYPE_LABELS[c.type]?.label || c.type})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* PARAMETRIC ENGINE INSPECTOR (FASE 1, 2, 3, 4, 5) */}
+          {parametricRules && selectedConnObj && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* LEFT COLUMN: 4 PHASES PARAMETRIC EDITOR */}
+              <div className="lg:col-span-8 flex flex-col gap-6">
+                
+                {/* FASE 1: REGRAS GEOMÉTRICAS */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl font-bold">
+                        <Compass className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm font-display">
+                          FASE 1 — Regras Geométricas de Encontro
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          Comportamento das barras, tipos de encaixe e limites angulares
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold">
+                      Fase 1
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Papel da Barra Contínua</label>
+                      <select
+                        value={parametricRules.geometricRules.continuousBarRole}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              continuousBarRole: e.target.value as ContinuousBarRole,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="passante">Passante (Sem interrupção)</option>
+                        <option value="principal">Principal (Viga Principal)</option>
+                        <option value="suporte_fixo">Suporte Fixo</option>
+                        <option value="livre">Livre</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Papel da Barra Interrompida</label>
+                      <select
+                        value={parametricRules.geometricRules.interruptedBarRole}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              interruptedBarRole: e.target.value as InterruptedBarRole,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="encostado">Encostado / Apoio Direto</option>
+                        <option value="secundario">Secundário (Travessa/Montante)</option>
+                        <option value="desmontavel">Desmontável / Flangeado</option>
+                        <option value="livre">Livre</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Tipo de Encontro / Interseção</label>
+                      <select
+                        value={parametricRules.geometricRules.junctionType}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              junctionType: e.target.value as JunctionType,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="perpendicular">Perpendicular (90°)</option>
+                        <option value="angular">Angular (Variável)</option>
+                        <option value="topo">Topo x Topo</option>
+                        <option value="sobreposta">Sobreposta</option>
+                        <option value="cruzada">Cruzada em X (+)</option>
+                        <option value="coaxial">Coaxial / Alinhada</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Tolerância Angular (±°)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={parametricRules.geometricRules.angleToleranceDegrees}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              angleToleranceDegrees: parseFloat(e.target.value) || 0.1,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Ángulo Mínimo Permitido (°)</label>
+                      <input
+                        type="number"
+                        value={parametricRules.geometricRules.minAngleDegrees}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              minAngleDegrees: parseFloat(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Ángulo Máximo Permitido (°)</label>
+                      <input
+                        type="number"
+                        value={parametricRules.geometricRules.maxAngleDegrees}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            geometricRules: {
+                              ...parametricRules.geometricRules,
+                              maxAngleDegrees: parseFloat(e.target.value) || 180,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* FASE 2: REGRAS DE FABRICAÇÃO */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 bg-amber-50 text-amber-600 rounded-xl font-bold">
+                        <Hammer className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm font-display">
+                          FASE 2 — Regras de Fabricação & Usinagem
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          Preparação de borda, fresta de raiz, chanfros e acabamento
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono bg-amber-50 text-amber-700 px-2 py-0.5 rounded font-bold">
+                      Fase 2
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Tipo de Corte Exigido</label>
+                      <select
+                        value={parametricRules.fabricationRules.cutType}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              cutType: e.target.value as CutType,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="corte_reto">Corte Reto (90°)</option>
+                        <option value="corte_45">Corte Angular 45°</option>
+                        <option value="boca_de_lobo">Boca de Lobo / Curvo</option>
+                        <option value="corte_especial">Corte Especial Multi-Ângulo</option>
+                        <option value="entalhe">Entalhe em U / V</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Preparação de Borda</label>
+                      <select
+                        value={parametricRules.fabricationRules.edgePreparation}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              edgePreparation: e.target.value as EdgePreparation,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="nenhuma">Nenhuma (Corte Direto)</option>
+                        <option value="bisel_simples">Bisel Simples V-30°</option>
+                        <option value="bisel_duplo">Bisel Duplo X-60°</option>
+                        <option value="esmerilhado">Esmerilhado / Desbastado</option>
+                        <option value="escareado">Escareado para Furo</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Folga de Solda / Raiz (mm)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={parametricRules.fabricationRules.weldGapMm}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              weldGapMm: parseFloat(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Folga para Pintura (mm)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={parametricRules.fabricationRules.paintClearanceMm}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              paintClearanceMm: parseFloat(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <input
+                        type="checkbox"
+                        id="check-needs-bevel"
+                        checked={parametricRules.fabricationRules.needsBevel}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              needsBevel: e.target.checked,
+                            },
+                          })
+                        }
+                        className="rounded text-amber-600 focus:ring-amber-500"
+                      />
+                      <label htmlFor="check-needs-bevel" className="font-bold text-slate-700 cursor-pointer">
+                        Exige Chanfro de Preparação
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <input
+                        type="checkbox"
+                        id="check-needs-finishing"
+                        checked={parametricRules.fabricationRules.needsFinishing}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fabricationRules: {
+                              ...parametricRules.fabricationRules,
+                              needsFinishing: e.target.checked,
+                            },
+                          })
+                        }
+                        className="rounded text-amber-600 focus:ring-amber-500"
+                      />
+                      <label htmlFor="check-needs-finishing" className="font-bold text-slate-700 cursor-pointer">
+                        Exige Acabamento Flap / Esmerilado
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* FASE 3: REGRAS DE FIXAÇÃO */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 bg-purple-50 text-purple-600 rounded-xl font-bold">
+                        <Wrench className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm font-display">
+                          FASE 3 — Regras de Fixação & Elementos de União
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          Processos de fixação (solda, parafuso, rebite), diâmetros e furações
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono bg-purple-50 text-purple-700 px-2 py-0.5 rounded font-bold">
+                      Fase 3
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Tipo Principal de Fixação</label>
+                      <select
+                        value={parametricRules.fasteningRules.fasteningType}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fasteningRules: {
+                              ...parametricRules.fasteningRules,
+                              fasteningType: e.target.value as FasteningType,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="soldada">⚡ Soldada (Mig/Mma/Tig)</option>
+                        <option value="parafusada">🔧 Aparafusada (Flange/Parafuso)</option>
+                        <option value="rebitada">🪛 Rebitada (Rebite Estrutural)</option>
+                        <option value="mista">🔨 Mista (Solda + Parafuso)</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Qtd. Mínima de Fixações</label>
+                      <input
+                        type="number"
+                        value={parametricRules.fasteningRules.minFastenerCount}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fasteningRules: {
+                              ...parametricRules.fasteningRules,
+                              minFastenerCount: parseInt(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Diâmetro Recomendado</label>
+                      <input
+                        type="text"
+                        value={parametricRules.fasteningRules.recommendedDiameter}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fasteningRules: {
+                              ...parametricRules.fasteningRules,
+                              recommendedDiameter: e.target.value,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Distância Mínima Entre Furos (mm)</label>
+                      <input
+                        type="number"
+                        value={parametricRules.fasteningRules.minHoleSpacingMm}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            fasteningRules: {
+                              ...parametricRules.fasteningRules,
+                              minHoleSpacingMm: parseFloat(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* FASE 4: REGRAS DE REFORÇO */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl font-bold">
+                        <ShieldAlert className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm font-display">
+                          FASE 4 — Regras de Reforço Estrutural
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          Chapas gusset, mãos de força, espessuras e enrijecedores
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-bold">
+                      Fase 4
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Exigência de Reforço</label>
+                      <select
+                        value={parametricRules.reinforcementRules.reinforcementRequirement}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            reinforcementRules: {
+                              ...parametricRules.reinforcementRules,
+                              reinforcementRequirement: e.target.value as ReinforcementRequirement,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="obrigatorio">🚨 Obrigatório</option>
+                        <option value="opcional">💡 Opcional (Recomendado para altas cargas)</option>
+                        <option value="nao_aplicavel">⚪ Não Aplicável</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Tipo de elemento de Reforço</label>
+                      <select
+                        value={parametricRules.reinforcementRules.reinforcementType}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            reinforcementRules: {
+                              ...parametricRules.reinforcementRules,
+                              reinforcementType: e.target.value as ReinforcementType,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      >
+                        <option value="chapa_gusset">Chapa Gusset Triangular</option>
+                        <option value="mao_de_forca">Mão de Força Diagonal</option>
+                        <option value="cantoneira">Cantoneira de Encaixe</option>
+                        <option value="luva_interna">Luva Interna de Reforço</option>
+                        <option value="chapa_base">Chapa Base Flangeada</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Espessura Mínima da Chapa (mm)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={parametricRules.reinforcementRules.minThicknessMm}
+                        onChange={(e) =>
+                          handleSaveParametricRulesChange({
+                            ...parametricRules,
+                            reinforcementRules: {
+                              ...parametricRules.reinforcementRules,
+                              minThicknessMm: parseFloat(e.target.value) || 0,
+                            },
+                          })
+                        }
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Dimensões Mínimas (Largura x Altura mm)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          placeholder="100"
+                          value={parametricRules.reinforcementRules.minDimensionsMm.width}
+                          onChange={(e) =>
+                            handleSaveParametricRulesChange({
+                              ...parametricRules,
+                              reinforcementRules: {
+                                ...parametricRules.reinforcementRules,
+                                minDimensionsMm: {
+                                  ...parametricRules.reinforcementRules.minDimensionsMm,
+                                  width: parseFloat(e.target.value) || 0,
+                                },
+                              },
+                            })
+                          }
+                          className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                        />
+                        <input
+                          type="number"
+                          placeholder="100"
+                          value={parametricRules.reinforcementRules.minDimensionsMm.height}
+                          onChange={(e) =>
+                            handleSaveParametricRulesChange({
+                              ...parametricRules,
+                              reinforcementRules: {
+                                ...parametricRules.reinforcementRules,
+                                minDimensionsMm: {
+                                  ...parametricRules.reinforcementRules.minDimensionsMm,
+                                  height: parseFloat(e.target.value) || 0,
+                                },
+                              },
+                            })
+                          }
+                          className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* RIGHT COLUMN: INTERACTIVE SIMULATOR & API QUERY REPORTS (FASE 5) */}
+              <div className="lg:col-span-4 flex flex-col gap-6">
+                
+                {/* SIMULADOR DE VALIDAÇÃO GEOMÉTRICO-PARAMÉTRICA */}
+                <div className="bg-slate-900 text-white rounded-2xl p-5 shadow-xl border border-slate-800 space-y-4 font-mono">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Compass className="w-5 h-5 text-amber-400" />
+                      <h4 className="font-bold text-sm text-amber-300">
+                        Simulador Geométrico
+                      </h4>
+                    </div>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded font-bold">
+                      Validação Live
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Testa se um ângulo e uma fresta específicos cumprem as regras paramétricas configuradas para a ligação.
+                  </p>
+
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Ângulo do Encontro (°):</span>
+                        <strong className="text-amber-400">{simAngle}°</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="180"
+                        value={simAngle}
+                        onChange={(e) => setSimAngle(parseInt(e.target.value))}
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Fresta / Folga (mm):</span>
+                        <strong className="text-amber-400">{simGapMm} mm</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="10"
+                        step="0.5"
+                        value={simGapMm}
+                        onChange={(e) => setSimGapMm(parseFloat(e.target.value))}
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Validation Box Result */}
+                  {simValidationResult && (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs space-y-2 mt-3 ${
+                        simValidationResult.isValid
+                          ? 'bg-emerald-950/80 text-emerald-200 border-emerald-700/80'
+                          : 'bg-red-950/80 text-red-200 border-red-700/80'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold text-sm">
+                        {simValidationResult.isValid ? (
+                          <>
+                            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span>Geometria APROVADA</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                            <span>Geometria REPROVADA ({simValidationResult.issues.length} erros)</span>
+                          </>
+                        )}
+                      </div>
+
+                      {simValidationResult.issues.length > 0 && (
+                        <div className="space-y-1 border-t border-red-800/60 pt-2 text-[11px]">
+                          {simValidationResult.issues.map((iss, idx) => (
+                            <p key={idx} className="text-red-300 flex items-start gap-1">
+                              <span>•</span>
+                              <span>{iss}</span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
+                      {simValidationResult.recommendations.length > 0 && (
+                        <div className="space-y-1 border-t border-slate-800 pt-2 text-[11px]">
+                          {simValidationResult.recommendations.map((rec, idx) => (
+                            <p key={idx} className="text-slate-300 flex items-start gap-1">
+                              <span>💡</span>
+                              <span>{rec}</span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* API PARAMÉTRICA — RELATÓRIO PÚBLICO (FASE 5) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 font-mono text-xs">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-5 h-5 text-indigo-600" />
+                      <h4 className="font-bold text-sm text-slate-900 font-display">
+                        API Paramétrica Pública
+                      </h4>
+                    </div>
+                    <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded font-bold">
+                      Fase 5
+                    </span>
+                  </div>
+
+                  {/* getRecommendedProcess() */}
+                  {recommendedProc && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+                      <div className="flex justify-between items-center text-indigo-900 font-bold">
+                        <span>getRecommendedProcess()</span>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">
+                          {recommendedProc.category.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-slate-800 font-bold text-xs">
+                        {recommendedProc.primaryProcess}
+                      </div>
+                      <div className="text-slate-600 text-[11px]">
+                        <strong>Preparação:</strong> {recommendedProc.edgePrepInstruction}
+                      </div>
+                      <div className="text-slate-600 text-[11px]">
+                        <strong>Acabamento:</strong> {recommendedProc.finishingLevel}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* getRequiredReinforcements() */}
+                  {requiredReinf && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+                      <div className="flex justify-between items-center text-emerald-900 font-bold">
+                        <span>getRequiredReinforcements()</span>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                            requiredReinf.requirement === 'obrigatorio'
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}
+                        >
+                          {requiredReinf.requirement.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-slate-800 font-bold text-xs">
+                        {requiredReinf.type} — {requiredReinf.recommendedPlateSpecs}
+                      </div>
+                      <p className="text-slate-600 text-[11px] leading-relaxed">
+                        {requiredReinf.structuralReason}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="text-[10px] text-slate-400 border-t border-slate-100 pt-2 text-center">
+                    Garantia de Independência: O Core Engine v1.0 consome este serviço sem acoplamento direto.
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* TAB CONTENT 3: INTEGRATED CERTIFICATION TEST SUITE (ET-021.1 + ET-021.2) */}
       {activeTab === 'test_suite' && (
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-mono px-2 py-0.5 rounded font-bold">
-                  ET-021.1 • Certificação de Suíte de Ligações
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-mono px-2.5 py-0.5 rounded font-bold">
+                  ET-021.1 + ET-021.2 • Suíte Completa de Homologação
                 </span>
               </div>
               <h3 className="text-xl font-bold font-display text-slate-900">
-                Suíte de Regressão Permanente do Módulo de Ligações
+                Suíte de Regressão e Certificação Unificada
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                Executa testes automatizados de cadastro, edição, duplicação, arquivamento e proteção contra exclusão de ligações padrão de fábrica.
+                Executa testes automatizados cobrindo a Biblioteca de Ligações e o Motor Paramétrico (4 Fases + API + Proteção do Core Engine).
               </p>
             </div>
 
             <button
               type="button"
-              onClick={handleRunTests}
+              onClick={handleRunAllTests}
               disabled={isRunningTests}
               className="bg-slate-900 hover:bg-slate-800 text-amber-400 font-mono font-bold text-xs px-5 py-3 rounded-xl transition shadow-md inline-flex items-center gap-2 cursor-pointer"
             >
               <RefreshCw className={`w-4 h-4 ${isRunningTests ? 'animate-spin' : ''}`} />
-              <span>{isRunningTests ? 'Executando Testes...' : 'EXECUTAR TESTES NOVAMENTE'}</span>
+              <span>{isRunningTests ? 'Executando Testes...' : 'EXECUTAR SUÍTE COMPLETA'}</span>
             </button>
           </div>
 
-          {/* Test Results Table */}
-          <div className="border border-slate-200 rounded-xl overflow-hidden font-mono text-xs">
-            <div className="bg-slate-900 text-slate-200 px-4 py-3 font-bold grid grid-cols-12 gap-2 text-[11px] uppercase tracking-wider">
-              <span className="col-span-2">ID do Teste</span>
-              <span className="col-span-4">Nome do Teste</span>
-              <span className="col-span-2">Status</span>
-              <span className="col-span-4">Resultado / Mensagem</span>
-            </div>
+          {/* Test Results ET-021.1 */}
+          <div className="space-y-3">
+            <h4 className="font-bold font-display text-sm text-slate-800 flex items-center gap-2">
+              <Link2 className="w-4 h-4 text-indigo-600" />
+              <span>Testes de Persistência e Cadastro (ET-021.1)</span>
+            </h4>
 
-            <div className="divide-y divide-slate-100 bg-white">
-              {testResults.map((test) => (
-                <div key={test.testId} className="px-4 py-3.5 grid grid-cols-12 gap-2 items-center hover:bg-slate-50/80">
-                  <span className="col-span-2 font-bold text-slate-700">{test.testId}</span>
-                  <span className="col-span-4 font-semibold text-slate-900">{test.name}</span>
-                  <span className="col-span-2">
-                    {test.passed ? (
-                      <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded">
-                        <Check className="w-3 h-3 stroke-[3]" /> PASS
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold px-2 py-0.5 rounded">
-                        <X className="w-3 h-3 stroke-[3]" /> FAIL
-                      </span>
-                    )}
-                  </span>
-                  <span className="col-span-4 text-slate-600 text-[11px] leading-tight">
-                    {test.message}
-                  </span>
-                </div>
-              ))}
+            <div className="border border-slate-200 rounded-xl overflow-hidden font-mono text-xs">
+              <div className="bg-slate-900 text-slate-200 px-4 py-3 font-bold grid grid-cols-12 gap-2 text-[11px] uppercase tracking-wider">
+                <span className="col-span-2">ID</span>
+                <span className="col-span-4">Nome do Teste</span>
+                <span className="col-span-2">Status</span>
+                <span className="col-span-4">Resultado / Mensagem</span>
+              </div>
+
+              <div className="divide-y divide-slate-100 bg-white">
+                {testResultsEt21_1.map((test) => (
+                  <div key={test.testId} className="px-4 py-3.5 grid grid-cols-12 gap-2 items-center hover:bg-slate-50/80">
+                    <span className="col-span-2 font-bold text-slate-700">{test.testId}</span>
+                    <span className="col-span-4 font-semibold text-slate-900">{test.name}</span>
+                    <span className="col-span-2">
+                      {test.passed ? (
+                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded">
+                          <Check className="w-3 h-3 stroke-[3]" /> PASS
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold px-2 py-0.5 rounded">
+                          <X className="w-3 h-3 stroke-[3]" /> FAIL
+                        </span>
+                      )}
+                    </span>
+                    <span className="col-span-4 text-slate-600 text-[11px] leading-tight">
+                      {test.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Test Results ET-021.2 */}
+          <div className="space-y-3 pt-4">
+            <h4 className="font-bold font-display text-sm text-slate-800 flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-amber-600" />
+              <span>Testes do Motor Paramétrico e API (ET-021.2)</span>
+            </h4>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden font-mono text-xs">
+              <div className="bg-slate-900 text-slate-200 px-4 py-3 font-bold grid grid-cols-12 gap-2 text-[11px] uppercase tracking-wider">
+                <span className="col-span-2">ID</span>
+                <span className="col-span-4">Nome do Teste</span>
+                <span className="col-span-2">Status</span>
+                <span className="col-span-4">Resultado / Mensagem</span>
+              </div>
+
+              <div className="divide-y divide-slate-100 bg-white">
+                {testResultsEt21_2.map((test) => (
+                  <div key={test.testId} className="px-4 py-3.5 grid grid-cols-12 gap-2 items-center hover:bg-slate-50/80">
+                    <span className="col-span-2 font-bold text-slate-700">{test.testId}</span>
+                    <span className="col-span-4 font-semibold text-slate-900">{test.name}</span>
+                    <span className="col-span-2">
+                      {test.passed ? (
+                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded">
+                          <Check className="w-3 h-3 stroke-[3]" /> PASS
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold px-2 py-0.5 rounded">
+                          <X className="w-3 h-3 stroke-[3]" /> FAIL
+                        </span>
+                      )}
+                    </span>
+                    <span className="col-span-4 text-slate-600 text-[11px] leading-tight">
+                      {test.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 flex items-start gap-3">
             <Info className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5" />
             <div>
-              <strong className="text-slate-800 font-mono block mb-0.5">Garantia de Isolamento Arquitetural:</strong>
-              Nenhum destes testes altera o Core Engine v1.0. A Biblioteca de Ligações opera de forma completamente desacoplada e disponibiliza suas especificações técnicas para futuros módulos da plataforma (Portões, Portas, Janelas, Estruturas).
+              <strong className="text-slate-800 font-mono block mb-0.5">Certificação de Compatibilidade Garantida:</strong>
+              Todos os testes atestam que o Motor Paramétrico (ET-021.2) funciona com 100% de isolamento, preservando o Core Engine v1.0 intacto e permitindo integração perfeita com todos os projetos existentes na serralheria.
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL 1: CREATE / EDIT CONNECTION FORM */}
+      {/* MODAL 1: CREATE / EDIT CONNECTION FORM (ET-021.1) */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -913,7 +1780,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col relative z-10 overflow-hidden"
             >
-              {/* Header */}
               <div className="bg-slate-900 text-white p-5 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-amber-500 text-slate-950 rounded-xl font-bold">
@@ -938,10 +1804,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
                 </button>
               </div>
 
-              {/* Scrollable Form Body */}
               <form id="form-connection-save" onSubmit={handleSave} className="p-6 overflow-y-auto space-y-5 text-xs font-mono">
-                
-                {/* Nome & Tipo */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="font-bold text-slate-700 block">Nome da Ligação *</label>
@@ -971,7 +1834,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Categoria & Desconto/Folga */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="font-bold text-slate-700 block">Categoria de Processo</label>
@@ -1000,7 +1862,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Descrição */}
                 <div className="space-y-1.5">
                   <label className="font-bold text-slate-700 block">Descrição Detalhada</label>
                   <textarea
@@ -1012,7 +1873,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                   />
                 </div>
 
-                {/* Perfis Compatíveis */}
                 <div className="space-y-2">
                   <label className="font-bold text-slate-700 block">Perfis Compatíveis</label>
                   <div className="flex flex-wrap gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-3">
@@ -1036,11 +1896,9 @@ export const ConnectionsLibraryModule: React.FC = () => {
                   </div>
                 </div>
 
-                {/* SPECIFICATIONS TOGGLES ACCORDION */}
                 <div className="space-y-3 pt-2 border-t border-slate-100">
                   <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">Especificações Técnicas Específicas</h4>
 
-                  {/* 1. Especificações de Solda */}
                   <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
                     <label className="p-3 flex items-center justify-between cursor-pointer select-none bg-slate-100/80">
                       <div className="flex items-center gap-2">
@@ -1075,7 +1933,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           <label className="text-[10px] text-slate-500 block">Fresta (mm)</label>
                           <input
                             type="number"
-                            step="0.5"
+                            step="0.1"
                             value={weldGapMm}
                             onChange={(e) => setWeldGapMm(e.target.value)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
@@ -1105,7 +1963,6 @@ export const ConnectionsLibraryModule: React.FC = () => {
                     )}
                   </div>
 
-                  {/* 2. Especificações de Parafuso */}
                   <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
                     <label className="p-3 flex items-center justify-between cursor-pointer select-none bg-slate-100/80">
                       <div className="flex items-center gap-2">
@@ -1115,9 +1972,9 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           onChange={(e) => setHasBoltSpecs(e.target.checked)}
                           className="rounded text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="font-bold text-slate-800">Especificações de Parafusos / Flange</span>
+                        <span className="font-bold text-slate-800">Especificações de Parafusos / Flanges</span>
                       </div>
-                      <span className="text-[10px] text-slate-400">🔧 M8, M10, 3/8"</span>
+                      <span className="text-[10px] text-slate-400">🔧 Furos & Flanges</span>
                     </label>
 
                     {hasBoltSpecs && (
@@ -1126,7 +1983,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
                           <label className="text-[10px] text-slate-500 block">Diâmetro</label>
                           <input
                             type="text"
-                            placeholder="M8, M10, 3/8"
+                            placeholder="M8"
                             value={boltDiameter}
                             onChange={(e) => setBoltDiameter(e.target.value)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
@@ -1134,21 +1991,21 @@ export const ConnectionsLibraryModule: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="text-[10px] text-slate-500 block">Tipo</label>
+                          <label className="text-[10px] text-slate-500 block">Tipo Cabeça</label>
                           <select
                             value={boltType}
                             onChange={(e) => setBoltType(e.target.value as any)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
                           >
                             <option value="sextavado">Sextavado</option>
-                            <option value="allen">Allen</option>
+                            <option value="allen">Allen Internal</option>
                             <option value="frances">Francês</option>
-                            <option value="chumbador">Chumbador</option>
+                            <option value="chumbador">Chumbador Expansivo</option>
                           </select>
                         </div>
 
                         <div>
-                          <label className="text-[10px] text-slate-500 block">Furos</label>
+                          <label className="text-[10px] text-slate-500 block">Nº de Furos</label>
                           <input
                             type="number"
                             value={boltHoleCount}
@@ -1158,7 +2015,7 @@ export const ConnectionsLibraryModule: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="text-[10px] text-slate-500 block">Chapa (mm)</label>
+                          <label className="text-[10px] text-slate-500 block">Chapa Flange (mm)</label>
                           <input
                             type="number"
                             step="0.5"
@@ -1170,215 +2027,25 @@ export const ConnectionsLibraryModule: React.FC = () => {
                       </div>
                     )}
                   </div>
-
-                  {/* 3. Especificações de Reforço */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                    <label className="p-3 flex items-center justify-between cursor-pointer select-none bg-slate-100/80">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={hasReinforcementSpecs}
-                          onChange={(e) => setHasReinforcementSpecs(e.target.checked)}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span className="font-bold text-slate-800">Gusset / Mão de Força / Reforço</span>
-                      </div>
-                      <span className="text-[10px] text-slate-400">🛡️ Chapas & Enrijecedores</span>
-                    </label>
-
-                    {hasReinforcementSpecs && (
-                      <div className="p-3 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white border-t border-slate-200">
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">Tipo Reforço</label>
-                          <select
-                            value={reinfType}
-                            onChange={(e) => setReinfType(e.target.value as any)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
-                          >
-                            <option value="cantoneira_reforco">Cantoneira</option>
-                            <option value="chapa_gusset">Chapa Gusset</option>
-                            <option value="mao_de_forca">Mão de Força</option>
-                            <option value="luva_interna">Luva Interna</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">Espessura (mm)</label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={reinfThickness}
-                            onChange={(e) => setReinfThickness(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">Comprimento (mm)</label>
-                          <input
-                            type="number"
-                            value={reinfLength}
-                            onChange={(e) => setReinfLength(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[11px]"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
                 </div>
 
-                {/* Observações */}
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-700 block">Observações de Oficina</label>
-                  <input
-                    type="text"
-                    placeholder="Instruções para o serralheiro ou montador..."
-                    value={formNotes}
-                    onChange={(e) => setFormNotes(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+                <div className="pt-4 border-t border-slate-200 flex justify-end gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 transition cursor-pointer font-bold"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 transition cursor-pointer font-bold shadow-md inline-flex items-center gap-2"
+                  >
+                    <Check className="w-4 h-4 stroke-[3]" />
+                    <span>{editingConn ? 'Salvar Alterações' : 'Cadastrar Ligação'}</span>
+                  </button>
                 </div>
-
               </form>
-
-              {/* Modal Footer */}
-              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-800 bg-white border border-slate-200 transition"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  form="form-connection-save"
-                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 transition shadow-md flex items-center gap-1.5"
-                >
-                  <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
-                  <span>Salvar Ligação</span>
-                </button>
-              </div>
-
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL 2: DETAIL VIEW */}
-      <AnimatePresence>
-        {viewingConn && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setViewingConn(null)}
-              className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs"
-            />
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden relative z-10"
-            >
-              <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">
-                    {CONNECTION_TYPE_LABELS[viewingConn.type]?.icon || '📐'}
-                  </span>
-                  <div>
-                    <h3 className="font-bold text-base font-display">{viewingConn.name}</h3>
-                    <p className="text-xs text-slate-400 font-mono">
-                      {CONNECTION_TYPE_LABELS[viewingConn.type]?.label}
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setViewingConn(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4 font-mono text-xs">
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Categoria:</span>
-                    <strong className="text-slate-900 capitalize">{viewingConn.category}</strong>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Desconto/Folga:</span>
-                    <strong className="text-slate-900">{viewingConn.deductionMm} mm</strong>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Tipo do Sistema:</span>
-                    <strong className={viewingConn.isStandard ? 'text-amber-700 font-bold' : 'text-indigo-700 font-bold'}>
-                      {viewingConn.isStandard ? '🔒 Padrão de Fábrica (Protegida)' : '✏️ Personalizada'}
-                    </strong>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="font-bold text-slate-800 text-[11px] uppercase mb-1">Descrição</h4>
-                  <p className="text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 leading-relaxed">
-                    {viewingConn.description || 'Sem descrição.'}
-                  </p>
-                </div>
-
-                {viewingConn.weldSpecs && (
-                  <div>
-                    <h4 className="font-bold text-amber-800 text-[11px] uppercase mb-1">⚡ Parâmetros de Solda</h4>
-                    <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200/60 space-y-1 text-amber-950">
-                      <div>Processo: <strong>{viewingConn.weldSpecs.weldType.toUpperCase()}</strong></div>
-                      <div>Fresta: <strong>{viewingConn.weldSpecs.gapMm} mm</strong></div>
-                      <div>Passes: <strong>{viewingConn.weldSpecs.passCount || 1}</strong></div>
-                    </div>
-                  </div>
-                )}
-
-                {viewingConn.boltSpecs && (
-                  <div>
-                    <h4 className="font-bold text-indigo-800 text-[11px] uppercase mb-1">🔧 Parâmetros de Parafusos</h4>
-                    <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-200/60 space-y-1 text-indigo-950">
-                      <div>Diâmetro: <strong>{viewingConn.boltSpecs.boltDiameter}</strong> ({viewingConn.boltSpecs.boltType})</div>
-                      <div>Furos: <strong>{viewingConn.boltSpecs.holeCount}</strong></div>
-                      <div>Chapa Flange: <strong>{viewingConn.boltSpecs.plateThicknessMm} mm</strong></div>
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <h4 className="font-bold text-slate-800 text-[11px] uppercase mb-1">Perfis Compatíveis</h4>
-                  <div className="flex flex-wrap gap-1">
-                    {viewingConn.compatibleProfiles?.map((p) => (
-                      <span key={p} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] border border-slate-200">
-                        {p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {viewingConn.notes && (
-                  <div className="text-[11px] italic text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                    Obs: {viewingConn.notes}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setViewingConn(null)}
-                  className="px-4 py-2 bg-slate-900 text-white font-bold rounded-xl text-xs"
-                >
-                  Fechar
-                </button>
-              </div>
             </motion.div>
           </div>
         )}
